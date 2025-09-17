@@ -7,11 +7,29 @@
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <flutter/flutter_view.h>   // safe to include; we won't query adapter
 #include <flutter/standard_method_codec.h>
 #include <flutter/texture_registrar.h>
 #include <cstdint>
+#include <optional>
+#include <unordered_map>
 
 using namespace spdlog;
+
+// ===== PixelBuffer backing store per render texture (kept here to avoid header changes) =====
+struct PixelBacking {
+  std::vector<uint8_t> bgra;                 // width*height*4
+  FlutterDesktopPixelBuffer fb{};            // {buffer,width,height}
+  size_t width = 0, height = 0;
+
+  // D3D used only for readback (created per-plugin elsewhere; we keep a ref here)
+  Microsoft::WRL::ComPtr<ID3D11Device> device;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> staging; // CPU-readable staging tex
+};
+
+static std::unordered_map<RiveNativeRenderTexture*, PixelBacking> g_pixelBacking;
+
+// ============================================================================================
 
 static void onRendererEnd(void* userData)
 {
@@ -43,6 +61,8 @@ static std::string convertWindowsString(WCHAR* wideString)
     return narrow_str;
 }
 
+// ------------------- RiveNativeRenderTexture -------------------
+
 RiveNativeRenderTexture::RiveNativeRenderTexture(
     ID3D11Device* gpu,
     void* riveRendererContext,
@@ -51,33 +71,39 @@ RiveNativeRenderTexture::RiveNativeRenderTexture(
     flutter::TextureRegistrar* textureRegistrar) :
     m_flutterSurfaceDescs(),
     m_swapchain(
-        // Since we don't have control over synchronization with the Flutter
-        // compositor, create a swapchain of *FOUR* textures in order to reduce
-        // the likelihood of drawing on top of a texture while it's still being
-        // read.
-        makeSwapchainTexture(gpu,
-                             width,
-                             height,
-                             /*doClear=*/true), // presentingTexture
-        makeSwapchainTexture(gpu,
-                             width,
-                             height,
-                             /*doClear=*/false), // renderTextures
+        // Keep the 4-deep GPU swapchain exactly as before (Rive renders here).
+        makeSwapchainTexture(gpu, width, height, /*doClear=*/true),
+        makeSwapchainTexture(gpu, width, height, /*doClear=*/false),
         makeSwapchainTexture(gpu, width, height, /*doClear=*/false),
         makeSwapchainTexture(gpu, width, height, /*doClear=*/false)),
     m_textureRegistrar(textureRegistrar)
 {
-    m_textureVariant =
-        std::make_unique<flutter::TextureVariant>(flutter::GpuSurfaceTexture(
-            kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
-            [this](auto, auto) {
-                FlutterWindowsSwapchain::PresentingTextureLock
-                    presentingTextureLock(&m_swapchain);
-                return &m_flutterSurfaceDescs[presentingTextureLock.texture()
-                                                  ->flutterSurfaceDescIdx];
+    // Set up PixelBuffer backing for this instance (no header changes needed).
+    PixelBacking& pb = g_pixelBacking[this];
+    pb.width = width;
+    pb.height = height;
+    pb.bgra.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+    pb.fb.buffer = pb.bgra.data();
+    pb.fb.width  = width;
+    pb.fb.height = height;
+    pb.device = gpu; // keep a ref for Map/Copy later
+
+    // Expose a PixelBufferTexture to Flutter.
+    m_textureVariant = std::make_unique<flutter::TextureVariant>(
+        flutter::PixelBufferTexture(
+            [this](size_t* outWidth, size_t* outHeight) -> const FlutterDesktopPixelBuffer* {
+                auto it = g_pixelBacking.find(this);
+                if (it == g_pixelBacking.end()) return nullptr;
+                PixelBacking& pb = it->second;
+                *outWidth  = pb.width;
+                *outHeight = pb.height;
+                // pb.fb.buffer already points at pb.bgra.data()
+                return &pb.fb;
             }));
 
     m_id = m_textureRegistrar->RegisterTexture(m_textureVariant.get());
+
+    // Create the Rive GPU renderer as before; it renders into our D3D swapchain.
     m_riveRenderer = createRiveRenderer(this,
                                         (void*)textureRegistrar,
                                         riveRendererContext,
@@ -105,7 +131,7 @@ std::unique_ptr<FlutterWindowsTexture> RiveNativeRenderTexture::
     desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE |
                      D3D11_BIND_RENDER_TARGET;
     desc.CPUAccessFlags = 0;
-    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    desc.MiscFlags = 0; // NOTE: no longer need SHARED for PixelBuffer path
 
     auto swapchainTexture = std::make_unique<FlutterWindowsTexture>();
 
@@ -114,7 +140,7 @@ std::unique_ptr<FlutterWindowsTexture> RiveNativeRenderTexture::
     D3D11_SUBRESOURCE_DATA initialDataStorage;
     if (doClear)
     {
-        pixelData.resize(height * width);
+        pixelData.resize(static_cast<size_t>(height) * static_cast<size_t>(width));
         memset(pixelData.data(), 0, pixelData.size() * sizeof(UINT));
         initialDataStorage.pSysMem = pixelData.data();
         initialDataStorage.SysMemPitch = width * sizeof(UINT);
@@ -125,34 +151,107 @@ std::unique_ptr<FlutterWindowsTexture> RiveNativeRenderTexture::
         initialData,
         swapchainTexture->nativeTexture.ReleaseAndGetAddressOf());
 
+    // We no longer expose FlutterDesktopGpuSurfaceDescriptor to Flutter, but
+    // keep this vector intact since other parts expect indices to exist.
     swapchainTexture->flutterSurfaceDescIdx = m_flutterSurfaceDescs.size();
-    auto& flutterSurfaceDesc =
-        m_flutterSurfaceDescs.emplace_back(FlutterDesktopGpuSurfaceDescriptor{
-            .struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor),
-            .handle = nullptr,
-            .width = width,
-            .height = height,
-            .visible_width = width,
-            .visible_height = height,
-            .format = kFlutterDesktopPixelFormatBGRA8888,
-            .release_callback = [](void* release_context) {},
-            .release_context = nullptr,
-        });
-    ComPtr<IDXGIResource> asDxgiResource;
-    swapchainTexture->nativeTexture.As(&asDxgiResource);
-    asDxgiResource->GetSharedHandle(&flutterSurfaceDesc.handle);
+    m_flutterSurfaceDescs.emplace_back(FlutterDesktopGpuSurfaceDescriptor{
+        .struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor),
+        .handle = nullptr,
+        .width = static_cast<int>(width),
+        .height = static_cast<int>(height),
+        .visible_width = static_cast<int>(width),
+        .visible_height = static_cast<int>(height),
+        .format = kFlutterDesktopPixelFormatBGRA8888,
+        .release_callback = [](void*) {},
+        .release_context = nullptr,
+    });
+
     return swapchainTexture;
 }
 
 void RiveNativeRenderTexture::end()
 {
+    // Copy the just-presented GPU texture into our CPU BGRA buffer.
+    auto it = g_pixelBacking.find(this);
+    if (it != g_pixelBacking.end())
+    {
+        PixelBacking& pb = it->second;
+
+        // Acquire current presenting texture from the swapchain.
+        FlutterWindowsSwapchain::PresentingTextureLock lock(&m_swapchain);
+        ID3D11Texture2D* src = lock.texture()->nativeTexture.Get();
+
+        if (src && pb.device)
+        {
+            D3D11_TEXTURE2D_DESC srcDesc{};
+            src->GetDesc(&srcDesc);
+
+            // (Re)create a staging texture if needed.
+            bool needNewStaging =
+                !pb.staging ||
+                [&]{
+                    D3D11_TEXTURE2D_DESC d{};
+                    pb.staging->GetDesc(&d);
+                    return d.Width != srcDesc.Width || d.Height != srcDesc.Height ||
+                           d.Format != srcDesc.Format || d.Usage != D3D11_USAGE_STAGING ||
+                           d.CPUAccessFlags != D3D11_CPU_ACCESS_READ;
+                }();
+
+            if (needNewStaging) {
+                pb.staging.Reset();
+                D3D11_TEXTURE2D_DESC s{};
+                s.Width = srcDesc.Width;
+                s.Height = srcDesc.Height;
+                s.MipLevels = 1;
+                s.ArraySize = 1;
+                s.Format = srcDesc.Format; // DXGI_FORMAT_B8G8R8A8_UNORM
+                s.SampleDesc = srcDesc.SampleDesc;
+                s.Usage = D3D11_USAGE_STAGING;
+                s.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                s.BindFlags = 0;
+                s.MiscFlags = 0;
+                pb.device->CreateTexture2D(&s, nullptr, pb.staging.ReleaseAndGetAddressOf());
+            }
+
+            Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
+            pb.device->GetImmediateContext(&ctx);
+            if (ctx) {
+                ctx->CopyResource(pb.staging.Get(), src);
+
+                D3D11_MAPPED_SUBRESOURCE mapped{};
+                if (SUCCEEDED(ctx->Map(pb.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                    const uint8_t* srcRow = static_cast<const uint8_t*>(mapped.pData);
+                    const size_t rowBytes = static_cast<size_t>(srcDesc.Width) * 4u;
+                    uint8_t* dstRow = pb.bgra.data();
+
+                    // Adjust PixelBuffer dimension if size changed (unlikely)
+                    pb.width = srcDesc.Width;
+                    pb.height = srcDesc.Height;
+                    pb.fb.width = static_cast<size_t>(srcDesc.Width);
+                    pb.fb.height = static_cast<size_t>(srcDesc.Height);
+
+                    for (UINT y = 0; y < srcDesc.Height; ++y) {
+                        memcpy(dstRow, srcRow, rowBytes);
+                        srcRow += mapped.RowPitch;
+                        dstRow += rowBytes;
+                    }
+                    ctx->Unmap(pb.staging.Get(), 0);
+                }
+            }
+        }
+    }
+
+    // Signal Flutter that a new frame is ready.
     m_textureRegistrar->MarkTextureFrameAvailable(m_id);
 }
 
 RiveNativeRenderTexture::~RiveNativeRenderTexture()
 {
     destroyRiveRenderer(m_riveRenderer);
+    g_pixelBacking.erase(this);
 }
+
+// ------------------- RiveNativePlugin -------------------
 
 void RiveNativePlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows* registrar)
@@ -202,82 +301,73 @@ RiveNativePlugin::RiveNativePlugin(
 
     trace("RiveNativePlugin::RiveNativePlugin");
 
-    ComPtr<IDXGIFactory2> factory;
-    CreateDXGIFactory(
-        __uuidof(IDXGIFactory2),
-        reinterpret_cast<void**>(factory.ReleaseAndGetAddressOf()));
-
-    auto view =
-        static_cast<flutter::PluginRegistrarWindows*>(registrar)->GetView();
-    if (view == nullptr)
-    {
-        error("Rive failed to find a Flutter View.");
-        return;
-    }
-    auto desiredAdapter =
-        static_cast<flutter::PluginRegistrarWindows*>(registrar)
-            ->GetView()
-            ->GetGraphicsAdapter();
-    if (desiredAdapter == nullptr)
-    {
-        error("Rive failed to find a Graphics Adapter.");
-        return;
-    }
-    DXGI_ADAPTER_DESC desiredDesc{};
-    desiredAdapter->GetDesc(&desiredDesc);
-    bool isIntel = desiredDesc.VendorId == 0x163C ||
-                   desiredDesc.VendorId == 0x8086 ||
-                   desiredDesc.VendorId == 0x8087;
-    info("Trying to use D3D device: {}",
-         convertWindowsString(desiredDesc.Description));
-
+    // Create our own D3D11 device (no dependency on Flutter's adapter; safe with Vulkan engine).
     ComPtr<ID3D11Device> gpu;
     ComPtr<ID3D11DeviceContext> gpuContext;
-    D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_1};
+    D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
     UINT creationFlags = 0;
 
-    HRESULT result = D3D11CreateDevice(desiredAdapter,
-                                       D3D_DRIVER_TYPE_UNKNOWN,
-                                       NULL,
-                                       creationFlags,
-                                       featureLevels,
-                                       (UINT)std::size(featureLevels),
-                                       D3D11_SDK_VERSION,
-                                       gpu.ReleaseAndGetAddressOf(),
-                                       NULL,
-                                       gpuContext.ReleaseAndGetAddressOf());
-    if (result != S_OK)
-    {
-        info("Failed to init device with adapter, will try default: {}",
-             convertWindowsString(desiredDesc.Description));
-        D3D11CreateDevice(NULL,
-                          D3D_DRIVER_TYPE_UNKNOWN,
-                          NULL,
-                          creationFlags,
-                          featureLevels,
-                          (UINT)std::size(featureLevels),
-                          D3D11_SDK_VERSION,
-                          gpu.ReleaseAndGetAddressOf(),
-                          NULL,
-                          gpuContext.ReleaseAndGetAddressOf());
+    HRESULT result = D3D11CreateDevice(
+        nullptr,                        // default adapter (hardware)
+        D3D_DRIVER_TYPE_HARDWARE,
+        NULL,
+        creationFlags,
+        featureLevels,
+        (UINT)std::size(featureLevels),
+        D3D11_SDK_VERSION,
+        gpu.ReleaseAndGetAddressOf(),
+        NULL,
+        gpuContext.ReleaseAndGetAddressOf());
+
+    if (result != S_OK) {
+        info("Hardware D3D11 device failed, falling back to WARP (software).");
+        result = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_WARP,
+            NULL,
+            creationFlags,
+            featureLevels,
+            (UINT)std::size(featureLevels),
+            D3D11_SDK_VERSION,
+            gpu.ReleaseAndGetAddressOf(),
+            NULL,
+            gpuContext.ReleaseAndGetAddressOf());
     }
+
     if (gpu && gpuContext)
     {
-        info("Got D3D device!");
+        info("Got D3D device (independent of Flutter's renderer).");
     }
     else
     {
-        error("Failed to init D3D device.");
+        error("Failed to init D3D11 device.");
         return;
     }
 
-    m_factory = std::move(factory);
+    // Detect Intel vendor (optional; preserved from your original logic)
+    bool isIntel = false;
+    {
+        ComPtr<IDXGIDevice> dxgiDevice;
+        if (SUCCEEDED(gpu.As(&dxgiDevice))) {
+            ComPtr<IDXGIAdapter> adapter;
+            if (SUCCEEDED(dxgiDevice->GetAdapter(&adapter)) && adapter) {
+                DXGI_ADAPTER_DESC desc{};
+                if (SUCCEEDED(adapter->GetDesc(&desc))) {
+                    isIntel = (desc.VendorId == 0x163C ||
+                               desc.VendorId == 0x8086 ||
+                               desc.VendorId == 0x8087);
+                    info("Using D3D adapter for Rive: {}", convertWindowsString(desc.Description));
+                }
+            }
+        }
+    }
+
     m_gpu = std::move(gpu);
     m_gpuContext = std::move(gpuContext);
     m_isIntelGpu = isIntel;
+
     trace("Making renderer context");
-    m_riveRendererContext =
-        createRiveRendererContext(m_gpu, m_gpuContext, isIntel);
+    m_riveRendererContext = createRiveRendererContext(m_gpu, m_gpuContext, isIntel);
     trace("Made renderer context: {}", m_riveRendererContext);
 }
 
@@ -332,11 +422,19 @@ void RiveNativePlugin::HandleMethodCall(
             return;
         }
 
+        // Create a RiveNativeRenderTexture that renders into D3D,
+        // but is exposed to Flutter as a PixelBuffer (read back on end()).
         auto renderTexture = new RiveNativeRenderTexture(m_gpu.Get(),
                                                          m_riveRendererContext,
                                                          width,
                                                          height,
                                                          m_textureRegistrar);
+
+        // Provide its device to the pixel backing (for readback).
+        if (auto it = g_pixelBacking.find(renderTexture); it != g_pixelBacking.end()) {
+            it->second.device = m_gpu;
+        }
+
         m_renderTextures[renderTexture->id()] = renderTexture;
 
         flutter::EncodableMap map;
@@ -383,6 +481,7 @@ void RiveNativePlugin::HandleMethodCall(
             m_renderTextures.erase(itr);
             m_textureRegistrar->UnregisterTexture(renderTexture->id());
             delete renderTexture;
+            // g_pixelBacking entry is erased in the render texture destructor
         }
         result->Success();
     }
