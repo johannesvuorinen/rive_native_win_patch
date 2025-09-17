@@ -148,15 +148,15 @@ std::unique_ptr<FlutterWindowsTexture> RiveNativeRenderTexture::
 
     swapchainTexture->flutterSurfaceDescIdx = m_flutterSurfaceDescs.size();
     m_flutterSurfaceDescs.emplace_back(FlutterDesktopGpuSurfaceDescriptor{
-        sizeof(FlutterDesktopGpuSurfaceDescriptor),
-        nullptr,
-        static_cast<int>(width),
-        static_cast<int>(height),
-        static_cast<int>(width),
-        static_cast<int>(height),
-        kFlutterDesktopPixelFormatBGRA8888,
-        [](void*) {},
-        nullptr,
+        /*struct_size*/    sizeof(FlutterDesktopGpuSurfaceDescriptor),
+        /*handle*/         nullptr,
+        /*width*/          static_cast<size_t>(width),
+        /*height*/         static_cast<size_t>(height),
+        /*visible_width*/  static_cast<size_t>(width),
+        /*visible_height*/ static_cast<size_t>(height),
+        /*format*/         kFlutterDesktopPixelFormatBGRA8888,
+        /*release_callback*/ [](void*) {},
+        /*release_context*/  nullptr,
     });
 
     return swapchainTexture;
@@ -196,6 +196,13 @@ void RiveNativeRenderTexture::end()
                     const uint8_t* srcRow = static_cast<const uint8_t*>(mapped.pData);
                     size_t rowBytes = static_cast<size_t>(srcDesc.Width) * 4u;
                     uint8_t* dstRow = pb.bgra.data();
+
+                    // Update PixelBuffer dimensions (if they changed)
+                    pb.width     = static_cast<size_t>(srcDesc.Width);
+                    pb.height    = static_cast<size_t>(srcDesc.Height);
+                    pb.fb.width  = static_cast<size_t>(srcDesc.Width);
+                    pb.fb.height = static_cast<size_t>(srcDesc.Height);
+
                     for (UINT y = 0; y < srcDesc.Height; ++y) {
                         memcpy(dstRow, srcRow, rowBytes);
                         srcRow += mapped.RowPitch;
