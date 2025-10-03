@@ -14,7 +14,7 @@
 #include <optional>
 #include <unordered_map>
 #include <functional>
-#include <d3d11.h>
+#include <d3d11_4.h>
 
 using namespace spdlog;
 
