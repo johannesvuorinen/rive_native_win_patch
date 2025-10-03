@@ -330,6 +330,13 @@ RiveNativePlugin::RiveNativePlugin(
     m_gpuContext = std::move(gpuContext);
     m_isIntelGpu = isIntel;
 
+    {
+      Microsoft::WRL::ComPtr<ID3D11Multithread> mt;
+      if (m_gpuContext && SUCCEEDED(m_gpuContext.As(&mt)) && mt) {
+        mt->SetMultithreadProtected(TRUE);
+      }
+    }
+
     trace("Making renderer context");
     m_riveRendererContext = createRiveRendererContext(m_gpu, m_gpuContext, isIntel);
     trace("Made renderer context: {}", m_riveRendererContext);
