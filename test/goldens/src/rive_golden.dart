@@ -133,16 +133,20 @@ class RiveGolden {
       add(SetImageAssetProperty(path: path, value: value));
 
   /// Do a pointer move on the widget
-  void pointerMove(rive.Vec2D position) => add(PointerMove(position: position));
+  void pointerMove(rive.Vec2D position, {int pointerId = 0}) =>
+      add(PointerMove(position: position, pointerId: pointerId));
 
   /// Do a pointer up on the widget
-  void pointerUp(rive.Vec2D position) => add(PointerUp(position: position));
+  void pointerUp(rive.Vec2D position, {int pointerId = 0}) =>
+      add(PointerUp(position: position, pointerId: pointerId));
 
   /// Do a pointer down on the widget
-  void pointerDown(rive.Vec2D position) => add(PointerDown(position: position));
+  void pointerDown(rive.Vec2D position, {int pointerId = 0}) =>
+      add(PointerDown(position: position, pointerId: pointerId));
 
   /// Do a pointer exit on the widget
-  void pointerExit(rive.Vec2D position) => add(PointerExit(position: position));
+  void pointerExit(rive.Vec2D position, {int pointerId = 0}) =>
+      add(PointerExit(position: position, pointerId: pointerId));
 
   /// Set a text on the artboard
   void setText(String name, String value, {String? path}) =>
@@ -211,13 +215,16 @@ class RiveGolden {
         case TriggerInput():
           _stateMachine.trigger(option.name, path: option.path)?.fire();
         case PointerMove():
-          _stateMachine.pointerMove(option.position);
+          _stateMachine.pointerMove(option.position,
+              pointerId: option.pointerId);
         case PointerUp():
-          _stateMachine.pointerUp(option.position);
+          _stateMachine.pointerUp(option.position, pointerId: option.pointerId);
         case PointerDown():
-          _stateMachine.pointerDown(option.position);
+          _stateMachine.pointerDown(option.position,
+              pointerId: option.pointerId);
         case PointerExit():
-          _stateMachine.pointerExit(option.position);
+          _stateMachine.pointerExit(option.position,
+              pointerId: option.pointerId);
         case SetText():
           _artboard.setText(option.name, option.value, path: option.path);
         case SetLayoutScaleFactor():
@@ -348,26 +355,30 @@ class TriggerInput extends GoldenOption {
 
 class PointerMove extends GoldenOption {
   final rive.Vec2D position;
+  final int pointerId;
 
-  PointerMove({required this.position});
+  PointerMove({required this.position, required this.pointerId});
 }
 
 class PointerUp extends GoldenOption {
   final rive.Vec2D position;
+  final int pointerId;
 
-  PointerUp({required this.position});
+  PointerUp({required this.position, required this.pointerId});
 }
 
 class PointerDown extends GoldenOption {
   final rive.Vec2D position;
+  final int pointerId;
 
-  PointerDown({required this.position});
+  PointerDown({required this.position, required this.pointerId});
 }
 
 class PointerExit extends GoldenOption {
   final rive.Vec2D position;
+  final int pointerId;
 
-  PointerExit({required this.position});
+  PointerExit({required this.position, required this.pointerId});
 }
 
 class SetText extends GoldenOption {

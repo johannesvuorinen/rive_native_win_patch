@@ -64,9 +64,10 @@ Artboard* NestedArtboard::findArtboard(
     }
     if (viewModelInstanceArtboard->asset() != nullptr)
     {
-        if (!parentArtboard()->isAncestor(viewModelInstanceArtboard->asset()))
+        if (!parentArtboard()->isAncestor(
+                viewModelInstanceArtboard->asset()->artboard()))
         {
-            return viewModelInstanceArtboard->asset();
+            return viewModelInstanceArtboard->asset()->artboard();
         }
         return nullptr;
     }
@@ -435,7 +436,7 @@ void NestedArtboard::unbind()
 
 void NestedArtboard::updateDataBinds()
 {
-    if (artboardInstance() != nullptr)
+    if (artboardInstance() != nullptr && !isPaused())
     {
         artboardInstance()->updateDataBinds();
     }
@@ -463,7 +464,7 @@ void NestedArtboard::bindViewModelInstance(
 
 bool NestedArtboard::advanceComponent(float elapsedSeconds, AdvanceFlags flags)
 {
-    if (m_Artboard == nullptr || isCollapsed())
+    if (m_Artboard == nullptr || isCollapsed() || isPaused())
     {
         return false;
     }
@@ -485,7 +486,10 @@ bool NestedArtboard::advanceComponent(float elapsedSeconds, AdvanceFlags flags)
             {
                 if (animation->is<NestedStateMachine>())
                 {
-                    if (animation->as<NestedStateMachine>()->tryChangeState())
+                    auto nestedSM = animation->as<NestedStateMachine>();
+                    if (nestedSM->tryChangeState() ||
+                        (nestedSM->stateMachineInstance() != nullptr &&
+                         nestedSM->stateMachineInstance()->needsAdvance()))
                     {
                         if (animation->advance(elapsedSeconds, newFrame))
                         {

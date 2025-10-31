@@ -362,9 +362,9 @@ public:
             // Use MSAA if we were given a canvas with 'antialias: true'.
             frameDescriptor.msaaSampleCount = m_renderTarget->sampleCount();
         }
-        else if (!m_renderContext->platformFeatures().supportsRasterOrdering &&
-                 !m_renderContext->platformFeatures()
-                      .supportsFragmentShaderAtomics)
+        else if (!m_renderContext->platformFeatures()
+                      .supportsRasterOrderingMode &&
+                 !m_renderContext->platformFeatures().supportsAtomicMode)
         {
             // Always use MSAA if we don't have
             // WEBGL_shader_pixel_local_storage.

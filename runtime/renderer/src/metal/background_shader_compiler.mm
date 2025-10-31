@@ -9,8 +9,10 @@
 #include "generated/shaders/common.glsl.hpp"
 #include "generated/shaders/advanced_blend.glsl.hpp"
 #include "generated/shaders/draw_path_common.glsl.hpp"
-#include "generated/shaders/draw_path.glsl.hpp"
-#include "generated/shaders/draw_image_mesh.glsl.hpp"
+#include "generated/shaders/draw_path.vert.hpp"
+#include "generated/shaders/draw_raster_order_path.frag.hpp"
+#include "generated/shaders/draw_image_mesh.vert.hpp"
+#include "generated/shaders/draw_raster_order_mesh.frag.hpp"
 
 #ifndef RIVE_IOS
 // iOS doesn't need the atomic shaders; every non-simulated iOS device supports
@@ -143,32 +145,12 @@ void BackgroundShaderCompiler::threadMain()
                 // Add baseInstance to the instanceID for path draws.
                 defines[@GLSL_ENABLE_INSTANCE_INDEX] = @"";
                 defines[@GLSL_DRAW_PATH] = @"";
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-#ifdef RIVE_IOS
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path];
-#else
-                [source appendFormat:@"%s\n",
-                                     interlockMode ==
-                                             gpu::InterlockMode::rasterOrdering
-                                         ? gpu::glsl::draw_path
-                                         : gpu::glsl::atomic_draw];
-#endif
+                break;
+            case DrawType::interiorTriangulation:
+                defines[@GLSL_DRAW_INTERIOR_TRIANGLES] = @"";
                 break;
             case DrawType::atlasBlit:
                 defines[@GLSL_ATLAS_BLIT] = @"1";
-                [[fallthrough]];
-            case DrawType::interiorTriangulation:
-                defines[@GLSL_DRAW_INTERIOR_TRIANGLES] = @"";
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-#ifdef RIVE_IOS
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path];
-#else
-                [source appendFormat:@"%s\n",
-                                     interlockMode ==
-                                             gpu::InterlockMode::rasterOrdering
-                                         ? gpu::glsl::draw_path
-                                         : gpu::glsl::atomic_draw];
-#endif
                 break;
             case DrawType::imageRect:
 #ifdef RIVE_IOS
@@ -177,28 +159,13 @@ void BackgroundShaderCompiler::threadMain()
                 assert(interlockMode == InterlockMode::atomics);
                 defines[@GLSL_DRAW_IMAGE] = @"";
                 defines[@GLSL_DRAW_IMAGE_RECT] = @"";
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-                [source appendFormat:@"%s\n", gpu::glsl::atomic_draw];
 #endif
                 break;
             case DrawType::imageMesh:
                 defines[@GLSL_DRAW_IMAGE] = @"";
                 defines[@GLSL_DRAW_IMAGE_MESH] = @"";
-#ifdef RIVE_IOS
-                [source appendFormat:@"%s\n", gpu::glsl::draw_image_mesh];
-#else
-                if (interlockMode == gpu::InterlockMode::rasterOrdering)
-                {
-                    [source appendFormat:@"%s\n", gpu::glsl::draw_image_mesh];
-                }
-                else
-                {
-                    [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-                    [source appendFormat:@"%s\n", gpu::glsl::atomic_draw];
-                }
-#endif
                 break;
-            case DrawType::atomicInitialize:
+            case DrawType::renderPassInitialize:
 #ifdef RIVE_IOS
                 RIVE_UNREACHABLE();
 #else
@@ -214,11 +181,9 @@ void BackgroundShaderCompiler::threadMain()
                 {
                     defines[@GLSL_SWIZZLE_COLOR_BGRA_TO_RGBA] = @"";
                 }
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-                [source appendFormat:@"%s\n", gpu::glsl::atomic_draw];
 #endif
                 break;
-            case DrawType::atomicResolve:
+            case DrawType::renderPassResolve:
 #ifdef RIVE_IOS
                 RIVE_UNREACHABLE();
 #else
@@ -230,8 +195,6 @@ void BackgroundShaderCompiler::threadMain()
                 {
                     defines[@GLSL_COALESCED_PLS_RESOLVE_AND_TRANSFER] = @"";
                 }
-                [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
-                [source appendFormat:@"%s\n", gpu::glsl::atomic_draw];
 #endif
                 break;
             case DrawType::msaaStrokes:
@@ -243,6 +206,57 @@ void BackgroundShaderCompiler::threadMain()
             case DrawType::msaaOuterCubics:
             case DrawType::msaaStencilClipReset:
                 RIVE_UNREACHABLE();
+        }
+
+#ifndef RIVE_IOS
+        if (interlockMode == gpu::InterlockMode::atomics)
+        {
+            [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
+            [source appendFormat:@"%s\n", gpu::glsl::atomic_draw];
+        }
+        else
+#endif
+        {
+            assert(interlockMode == gpu::InterlockMode::rasterOrdering);
+            switch (drawType)
+            {
+                case DrawType::midpointFanPatches:
+                case DrawType::midpointFanCenterAAPatches:
+                case DrawType::outerCurvePatches:
+                case DrawType::interiorTriangulation:
+                    [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
+                    [source appendFormat:@"%s\n", gpu::glsl::draw_path_vert];
+                    [source
+                        appendFormat:@"%s\n",
+                                     gpu::glsl::draw_raster_order_path_frag];
+                    break;
+                case DrawType::atlasBlit:
+                    [source appendFormat:@"%s\n", gpu::glsl::draw_path_common];
+                    [source appendFormat:@"%s\n", gpu::glsl::draw_path_vert];
+                    [source
+                        appendFormat:@"%s\n",
+                                     gpu::glsl::draw_raster_order_mesh_frag];
+                    break;
+                case DrawType::imageMesh:
+                    [source
+                        appendFormat:@"%s\n", gpu::glsl::draw_image_mesh_vert];
+                    [source
+                        appendFormat:@"%s\n",
+                                     gpu::glsl::draw_raster_order_mesh_frag];
+                    break;
+                case DrawType::imageRect:
+                case DrawType::msaaStrokes:
+                case DrawType::msaaMidpointFanBorrowedCoverage:
+                case DrawType::msaaMidpointFans:
+                case DrawType::msaaMidpointFanStencilReset:
+                case DrawType::msaaMidpointFanPathsStencil:
+                case DrawType::msaaMidpointFanPathsCover:
+                case DrawType::msaaOuterCubics:
+                case DrawType::msaaStencilClipReset:
+                case DrawType::renderPassInitialize:
+                case DrawType::renderPassResolve:
+                    RIVE_UNREACHABLE();
+            }
         }
 
         NSError* err = nil;

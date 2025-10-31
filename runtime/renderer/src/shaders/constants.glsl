@@ -101,6 +101,9 @@
 #define RIGHT_JOIN_CONTOUR_FLAG (1u << 19u)
 #define CONTOUR_ID_MASK 0xffffu
 
+// This is guaranteed to not collide with any path IDs being rendered.
+#define INVALID_PATH_ID .0
+
 // This is guaranteed to not collide with a neighboring contour ID.
 #define INVALID_CONTOUR_ID_WITH_FLAGS 0u
 
@@ -172,6 +175,19 @@
 #define COVERAGE_PLANE_IDX 3
 #define PLS_PLANE_COUNT 4
 
+// This is the framebuffer attachment index of the final color output during the
+// "coalesced" atomic resolve. (Currently only used by Vulkan.)
+// NOTE: This attachment is still referenced as color attachment 0 by the
+// resolve subpass, so the shader doesn't need to know about it.
+// NOTE: Atomic mode does not use SCRATCH_COLOR_PLANE_IDX, which is why we chose
+// to alias this one.
+#define COALESCED_ATOMIC_RESOLVE_IDX SCRATCH_COLOR_PLANE_IDX
+
+// MSAA attaches different resources to the framebuffer instead of PLS planes.
+#define MSAA_DEPTH_STENCIL_IDX 1u
+#define MSAA_RESOLVE_IDX 2u
+#define MSAA_COLOR_SEED_IDX 3u
+
 // Rive has a hard-coded miter limit of 4 in the editor and all runtimes.
 #define RIVE_MITER_LIMIT float(4)
 // acos(1/4), because the miter limit is 4.
@@ -241,7 +257,7 @@
 #define NESTED_CLIPPING_SPECIALIZATION_IDX 5
 #define HSL_BLEND_MODES_SPECIALIZATION_IDX 6
 #define CLOCKWISE_FILL_SPECIALIZATION_IDX 7
-#define BORROWED_COVERAGE_PREPASS_SPECIALIZATION_IDX 8
+#define BORROWED_COVERAGE_PASS_SPECIALIZATION_IDX 8
 #define VULKAN_VENDOR_ID_SPECIALIZATION_IDX 9
 #define SPECIALIZATION_COUNT 10
 

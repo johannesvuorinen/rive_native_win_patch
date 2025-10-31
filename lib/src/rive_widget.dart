@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
 import 'package:rive_native/rive_native.dart' as rive;
+import 'package:rive_native/rive_native.dart';
 
 abstract base class ProceduralPainter extends rive.RivePainter {
   /// Called each frame to advance the animation.
@@ -68,9 +69,6 @@ base class BasicArtboardPainter extends ArtboardPainter {
     notifyListeners();
   }
 
-  double get _layoutScaleFactorToUse =>
-      layoutScaleFactor * _lastPaintPixelRatio;
-
   rive.Artboard? _artboard;
   rive.Artboard? get artboard => _artboard;
 
@@ -113,25 +111,22 @@ base class BasicArtboardPainter extends ArtboardPainter {
     if (artboard == null) {
       return;
     }
-    renderer.save();
     renderer.align(
       fit,
       alignment,
       rive.AABB.fromValues(0, 0, size.width, size.height),
       artboard.bounds,
-      _layoutScaleFactorToUse,
+      _layoutScaleFactor,
     );
     artboard.draw(renderer);
-    renderer.restore();
   }
 
   void _resizeArtboard() {
     final artboard = _artboard;
     if (artboard == null) return;
 
-    final factor = _layoutScaleFactorToUse;
-    artboard.width = lastSize.width / factor;
-    artboard.height = lastSize.height / factor;
+    artboard.width = lastSize.width / _layoutScaleFactor;
+    artboard.height = lastSize.height / _layoutScaleFactor;
 
     _requireResize = false;
   }
@@ -205,7 +200,7 @@ base class StateMachinePainter extends BasicArtboardPainter
             artboardBounds: artboard.bounds,
             fit: fit,
             alignment: alignment,
-            size: _lastSize / _lastPaintPixelRatio,
+            size: _lastSize,
             scaleFactor: layoutScaleFactor,
           ),
         ) ??
@@ -224,20 +219,20 @@ base class StateMachinePainter extends BasicArtboardPainter
       artboardBounds: artboard.bounds,
       fit: fit,
       alignment: alignment,
-      size: _lastSize / _lastPaintPixelRatio,
+      size: _lastSize,
       scaleFactor: layoutScaleFactor,
     );
 
     if (event is PointerDownEvent) {
-      stateMachine.pointerDown(position);
+      stateMachine.pointerDown(position, pointerId: event.pointer);
     } else if (event is PointerUpEvent) {
-      stateMachine.pointerUp(position);
+      stateMachine.pointerUp(position, pointerId: event.pointer);
     } else if (event is PointerMoveEvent) {
-      stateMachine.pointerMove(position);
+      stateMachine.pointerMove(position, pointerId: event.pointer);
     } else if (event is PointerHoverEvent) {
-      stateMachine.pointerMove(position);
+      stateMachine.pointerMove(position, pointerId: event.pointer);
     } else if (event is PointerExitEvent) {
-      stateMachine.pointerExit(position);
+      stateMachine.pointerExit(position, pointerId: event.pointer);
     }
   }
 
@@ -522,11 +517,16 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 
   rive.RivePointerEventMixin? _rivePointerEvent;
 
+  // TODO expose option through widget
+  // @override
+  // bool get isRepaintBoundary => false;
+
   T? _rivePainter;
   T? get rivePainter => _rivePainter;
 
   @mustCallSuper
   set painter(T? value) {
+    markNeedsLayout();
     if (_rivePainter == value) {
       return;
     }
@@ -546,9 +546,9 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
       _tickerModeEnabled = value;
 
       if (_tickerModeEnabled) {
-        _startTicker();
+        startTicker();
       } else {
-        _stopTicker();
+        stopTicker();
       }
     }
   }
@@ -664,14 +664,14 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     _validForMouseTracker = true;
     _ticker = Ticker(frameCallback);
     if (tickerModeEnabled) {
-      _startTicker();
+      startTicker();
     }
   }
 
   @override
   void detach() {
     _validForMouseTracker = false;
-    _stopTicker();
+    stopTicker();
 
     super.detach();
   }
@@ -685,14 +685,19 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     super.dispose();
   }
 
-  void _stopTicker() {
+  void stopTicker() {
     _elapsedSeconds = 0;
     _prevTickerElapsedInSeconds = 0;
 
     _ticker?.stop();
   }
 
-  void _startTicker() {
+  void startTicker() {
+    if (_rivePainter == null) {
+      // If the painter is not set, we don't need to start the ticker.
+      // Otherwise, we will start the ticker and then never stop it.
+      return;
+    }
     _elapsedSeconds = 0;
     _prevTickerElapsedInSeconds = 0;
 
@@ -707,7 +712,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
   @nonVirtual
   void restartTickerIfStopped() {
     if (_ticker != null && !_ticker!.isActive && tickerModeEnabled) {
-      _startTicker();
+      startTicker();
     }
   }
 
@@ -744,10 +749,6 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     // - Neither advance nor draw
     // - (Optional enum for users to choose)
     _calculateElapsedSeconds(duration);
-
-    if (shouldAdvance == false) {
-      _stopTicker();
-    }
   }
 
   @override
@@ -830,6 +831,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 
   @override
   void performLayout() {
+    restartTickerIfStopped();
     if (!sizedByParent) {
       // We can use the intrinsic size here because the intrinsic size matches
       // the constrained artboard size when not sized by parent.
@@ -839,19 +841,21 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 }
 
 class FlutterRiveRenderBox extends RiveRenderBox<ProceduralPainter> {
-  @override
-  set painter(ProceduralPainter? value) {
-    super.painter = value;
-    markNeedsLayout();
-  }
+  bool _shouldAdvance = false;
 
   @override
-  bool get shouldAdvance => rivePainter?.advance(elapsedSeconds) ?? false;
+  bool get shouldAdvance => _shouldAdvance;
 
   @override
   @mustCallSuper
   void frameCallback(Duration duration) {
     super.frameCallback(duration);
+
+    _shouldAdvance = rivePainter?.advance(elapsedSeconds) ?? false;
+
+    if (!_shouldAdvance) {
+      stopTicker();
+    }
 
     markNeedsPaint();
   }
@@ -870,8 +874,14 @@ class FlutterRiveRenderBox extends RiveRenderBox<ProceduralPainter> {
   }
 }
 
-abstract class RiveNativeRenderBox<T extends rive.RivePainter>
-    extends RiveRenderBox<T> {
+abstract class RiveNativeRenderBox extends RiveRenderBox<RenderTexturePainter> {
+  RenderTexture _renderTexture;
+
+  @override
+  bool get shouldAdvance => _shouldAdvance;
+  bool _shouldAdvance = true;
+
+  RiveNativeRenderBox(this._renderTexture);
   double _devicePixelRatio = 1.0;
 
   /// The device pixel ratio used to determine the size of the paint area.
@@ -884,8 +894,88 @@ abstract class RiveNativeRenderBox<T extends rive.RivePainter>
     markNeedsLayout();
   }
 
+  RenderTexture get renderTexture => _renderTexture;
+  set renderTexture(RenderTexture value) {
+    if (_renderTexture == value) {
+      return;
+    }
+    _renderTexture = value;
+    markNeedsPaint();
+  }
+
   @override
   void performResize() {
     size = constraints.biggest;
+  }
+
+  @override
+  void frameCallback(Duration duration) {
+    super.frameCallback(duration);
+    paintTexture(elapsedSeconds);
+  }
+
+  void paintTexture(double elapsedSeconds, {bool forceShouldAdvance = false}) {
+    final painter = rivePainter;
+    if (painter == null || !renderTexture.isReady || !hasSize) {
+      return;
+    }
+    if (!renderTexture.clear(painter.background, painter.clear)) {
+      markNeedsPaint();
+      return;
+    }
+    final renderer = renderTexture.renderer;
+    renderer.save();
+    renderer.transform(Mat2D.fromScale(scaleWidth, scaleHeight));
+    final shouldAdvance = painter.paint(
+      renderTexture,
+      devicePixelRatio,
+      desiredSize,
+      elapsedSeconds,
+    );
+    renderer.restore();
+    _shouldAdvance = forceShouldAdvance == true || shouldAdvance;
+    if (_shouldAdvance) {
+      restartTickerIfStopped();
+    } else {
+      stopTicker();
+    }
+    if (!renderTexture.flush(devicePixelRatio)) {
+      markNeedsPaint();
+      return;
+    }
+    if (painter.paintsCanvas) {
+      markNeedsPaint();
+    }
+  }
+
+  Matrix4 _lastTransformTo = Matrix4.identity();
+  double desiredTransformWidthScale = 1;
+  double desiredTransformHeightScale = 1;
+  double get scaleWidth => devicePixelRatio * desiredTransformWidthScale;
+  double get scaleHeight => devicePixelRatio * desiredTransformHeightScale;
+  Size get desiredSize => size;
+  bool _markNeedsLayoutCalled = false;
+
+  @override
+  void markNeedsLayout() {
+    _markNeedsLayoutCalled = true;
+    super.markNeedsLayout();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (_markNeedsLayoutCalled) {
+      final currentTransformTo = getTransformTo(null);
+      if (currentTransformTo != _lastTransformTo) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          markNeedsLayout();
+        });
+        _lastTransformTo = Matrix4.copy(currentTransformTo);
+        desiredTransformWidthScale = _lastTransformTo.entry(0, 0).abs();
+        desiredTransformHeightScale = _lastTransformTo.entry(1, 1).abs();
+      }
+      _markNeedsLayoutCalled = false;
+    }
+    super.paint(context, offset);
   }
 }

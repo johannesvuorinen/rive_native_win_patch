@@ -25,6 +25,7 @@ late js.JSFunction _scriptingWorkspaceFormat;
 late js.JSFunction _scriptingWorkspaceCompile;
 late js.JSFunction _nativeFontBytes;
 late js.JSFunction _freeNativeFont;
+late js.JSFunction _scriptingWorkspaceBuiltinDefinitions;
 
 class ScriptingWorkspaceResponseResultWasm
     implements ScriptingWorkspaceResponseResult {
@@ -65,6 +66,8 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         module['scriptingWorkspaceCompleteInsertion'] as js.JSFunction;
     _scriptingWorkspaceRequestAutocomplete =
         module['scriptingWorkspaceRequestAutocomplete'] as js.JSFunction;
+    _scriptingWorkspaceBuiltinDefinitions =
+        module['_scriptingWorkspaceBuiltinDefinitions'] as js.JSFunction;
     _scriptingWorkspaceHighlightRow =
         module['scriptingWorkspaceHighlightRow'] as js.JSFunction;
     _scriptingWorkspaceResponse =
@@ -243,6 +246,12 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         null,
         _nativePtr.toJS,
       );
+
+  @override
+  String get builtinDefinitions =>
+      RiveWasm.toDartString((_scriptingWorkspaceBuiltinDefinitions
+              .callAsFunction(null, _nativePtr.toJS) as js.JSNumber)
+          .toDartInt);
 }
 
 ScriptingWorkspace makeScriptingWorkspace() => ScriptingWorkspaceWasm();

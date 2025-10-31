@@ -14,6 +14,7 @@ void DataBindContextValueArtboard::apply(Core* target,
                                          uint32_t propertyKey,
                                          bool isMainDirection)
 {
+    syncSourceValue();
     auto source = m_dataBind->source();
     if (source != nullptr && source->is<ViewModelInstanceArtboard>())
     {
@@ -32,18 +33,4 @@ void DataBindContextValueArtboard::apply(Core* target,
             CoreRegistry::setUint(target, propertyKey, value);
         }
     }
-}
-
-bool DataBindContextValueArtboard::syncTargetValue(Core* target,
-                                                   uint32_t propertyKey)
-{
-    auto value = CoreRegistry::getUint(target, propertyKey);
-
-    if (m_previousValue != value)
-    {
-        m_previousValue = value;
-        m_targetDataValue.value(value);
-        return true;
-    }
-    return false;
 }

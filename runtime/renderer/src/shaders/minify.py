@@ -35,17 +35,21 @@ parser.add_argument("-o", "--outdir", required=True,
                     help="OUTPUT directory to store the header files")
 parser.add_argument("-H", "--human-readable", action='store_true',
                     help="don't rename or strip out comments or whitespace")
-parser.add_argument("-p", "--ply-path", required=True, type=str, help="path to ply module")
+parser.add_argument("-p", "--ply-path", type=str, help="path to ply module")
 
 args = parser.parse_args()
 
-# Convert posix path to windows 
-convertedPath = args.ply_path
-if sys.platform.startswith('win32') and args.ply_path[:2] == '/c':
-    convertedPath = 'C:\\' + args.ply_path[2:]
-    print('Using ply path:' + convertedPath)
+if args.ply_path:
+    # --ply-path was specified, so add it to the sys path so we can locate the module.
+    # (if it was not specified we'll assume that it's already reachable via the path)
 
-sys.path.append(convertedPath)
+    # Convert posix path to windows 
+    convertedPath = args.ply_path
+    if sys.platform.startswith('win32') and args.ply_path[:2] == '/c':
+        convertedPath = 'C:\\' + args.ply_path[2:]
+        print('Using ply path:' + convertedPath)
+
+    sys.path.append(convertedPath)
 
 import ply.lex as lex
 
@@ -545,8 +549,8 @@ class Minifier:
 
 
     def write_exports(self, outdir):
-        output_path = os.path.join(outdir, os.path.splitext(self.basename)[0] + ".exports.h")
-        print("Exporting %s <- %s" % (output_path, self.basename))
+        output_path = os.path.join(outdir, f"{self.basename}.exports.h")
+        print(f"Exporting {output_path} <- {self.basename}")
         out = open(output_path, "w", newline='\n')
         out.write('#pragma once\n\n')
         for exp in sorted(self.exports):
@@ -561,13 +565,17 @@ class Minifier:
         out = open(output_path, "w", newline='\n')
         out.write("#pragma once\n\n")
 
-        out.write('#include "%s"\n\n' % (os.path.splitext(self.basename)[0] + ".exports.h"))
+        out.write(f'#include "{self.basename}.exports.h"\n\n')
 
         # emit shader code.
+        root, ext = os.path.splitext(self.basename)
+        cpp_name = root
+        if ext != '.glsl':
+            cpp_name = f"{root}_{ext[1:]}"
         out.write("namespace rive {\n")
         out.write("namespace gpu {\n")
         out.write("namespace glsl {\n")
-        out.write('const char %s[] = R"===(' % os.path.splitext(self.basename)[0])
+        out.write(f'const char {cpp_name}[] = R"===(')
 
         is_newline = self.emit_tokens_to_rewritten_glsl(out, preserve_exported_switches=False)
         if not is_newline:
@@ -580,8 +588,9 @@ class Minifier:
         out.close()
 
     def write_offline_glsl(self, outdir):
-        output_path = os.path.join(outdir, os.path.splitext(self.basename)[0] + ".minified.glsl")
-        print("Minifying %s <- %s" % (output_path, self.basename))
+        root, ext = os.path.splitext(self.basename)
+        output_path = os.path.join(outdir, f"{root}.minified{ext}")
+        print(f"Minifying f{output_path} <- {self.basename}")
         out = open(output_path, "w", newline='\n')
         self.emit_tokens_to_rewritten_glsl(out, preserve_exported_switches=True)
         out.close()

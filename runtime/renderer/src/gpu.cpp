@@ -10,7 +10,7 @@
 #include "rive_render_paint.hpp"
 #include "gradient.hpp"
 
-#include "generated/shaders/draw_path.exports.h"
+#include "generated/shaders/draw_path.vert.exports.h"
 
 namespace rive::gpu
 {
@@ -25,14 +25,15 @@ uint32_t ShaderUniqueKey(DrawType drawType,
 {
     if (miscFlags & ShaderMiscFlags::coalescedResolveAndTransfer)
     {
-        assert(drawType == DrawType::atomicResolve);
+        assert(drawType == DrawType::renderPassResolve);
         assert(shaderFeatures & ShaderFeatures::ENABLE_ADVANCED_BLEND);
         assert(interlockMode == InterlockMode::atomics);
     }
     if (miscFlags & (ShaderMiscFlags::storeColorClear |
                      ShaderMiscFlags::swizzleColorBGRAToRGBA))
     {
-        assert(drawType == DrawType::atomicInitialize);
+        assert(drawType == DrawType::renderPassInitialize);
+        assert(interlockMode == InterlockMode::atomics);
     }
     uint32_t drawTypeKey;
     switch (drawType)
@@ -61,22 +62,25 @@ uint32_t ShaderUniqueKey(DrawType drawType,
         case DrawType::imageMesh:
             drawTypeKey = 4;
             break;
-        case DrawType::atomicInitialize:
-            assert(interlockMode == gpu::InterlockMode::atomics);
+        case DrawType::msaaStencilClipReset:
+            assert(interlockMode == InterlockMode::msaa);
+            drawTypeKey = 7;
+            break;
+        case DrawType::renderPassInitialize:
+            assert(interlockMode == InterlockMode::atomics ||
+                   interlockMode == InterlockMode::msaa);
             drawTypeKey = 5;
             break;
-        case DrawType::atomicResolve:
-            assert(interlockMode == gpu::InterlockMode::atomics);
+        case DrawType::renderPassResolve:
+            assert(interlockMode == InterlockMode::atomics);
             drawTypeKey = 6;
-            break;
-        case DrawType::msaaStencilClipReset:
-            assert(interlockMode == gpu::InterlockMode::msaa);
-            drawTypeKey = 7;
             break;
     }
     uint32_t key = static_cast<uint32_t>(miscFlags);
-    assert(static_cast<uint32_t>(interlockMode) < 1 << 2);
-    key = (key << 2) | static_cast<uint32_t>(interlockMode);
+    assert(static_cast<uint32_t>(interlockMode) <
+           1 << INTERLOCK_MODE_BIT_COUNT);
+    key = (key << INTERLOCK_MODE_BIT_COUNT) |
+          static_cast<uint32_t>(interlockMode);
     key = (key << kShaderFeatureCount) |
           (shaderFeatures & ShaderFeaturesMaskFor(drawType, interlockMode))
               .bits();
@@ -487,6 +491,7 @@ FlushUniforms::FlushUniforms(const FlushDescriptor& flushDesc,
     m_coverageBufferPrefix(flushDesc.coverageBufferPrefix),
     m_pathIDGranularity(platformFeatures.pathIDGranularity),
     m_vertexDiscardValue(std::numeric_limits<float>::quiet_NaN()),
+    m_mipMapLODBias(MIP_MAP_LOD_BIAS),
     m_wireframeEnabled(flushDesc.wireframe)
 {}
 
@@ -567,11 +572,11 @@ void PaintData::set(DrawContents singleDrawContents,
             break;
         }
     }
-    if (singleDrawContents & gpu::DrawContents::nonZeroFill)
+    if (singleDrawContents & DrawContents::nonZeroFill)
     {
         localParams |= PAINT_FLAG_NON_ZERO_FILL;
     }
-    else if (singleDrawContents & gpu::DrawContents::evenOddFill)
+    else if (singleDrawContents & DrawContents::evenOddFill)
     {
         localParams |= PAINT_FLAG_EVEN_ODD_FILL;
     }
@@ -589,7 +594,7 @@ void PaintAuxData::set(const Mat2D& viewMatrix,
                        const Texture* imageTexture,
                        const ClipRectInverseMatrix* clipRectInverseMatrix,
                        const RenderTarget* renderTarget,
-                       const gpu::PlatformFeatures& platformFeatures)
+                       const PlatformFeatures& platformFeatures)
 {
     switch (paintType)
     {
@@ -623,7 +628,8 @@ void PaintAuxData::set(const Mat2D& viewMatrix,
                 // Instead of finding sqrt(maxScaleFactorPow2), just multiply
                 // the log by .5.
                 m_imageTextureLOD =
-                    log2f(std::max(maxScaleFactorPow2, 1.f)) * .5f;
+                    (log2f(std::max(maxScaleFactorPow2, 1.f)) * .5f) +
+                    MIP_MAP_LOD_BIAS;
             }
             else
             {
@@ -812,11 +818,15 @@ static void get_depth_state(InterlockMode interlockMode,
                   (DrawContents::clockwiseFill | DrawContents::clipUpdate));
             break;
 
+        case DrawType::renderPassInitialize:
+            pipelineState->depthTestEnabled = false;
+            pipelineState->depthWriteEnabled = false;
+            break;
+
         case DrawType::interiorTriangulation:
-        case DrawType::atomicInitialize:
-        case DrawType::atomicResolve:
         case DrawType::midpointFanPatches:
         case DrawType::midpointFanCenterAAPatches:
+        case DrawType::renderPassResolve:
             RIVE_UNREACHABLE();
     }
 }
@@ -1082,16 +1092,22 @@ static uint8_t get_stencil_settings(InterlockMode interlockMode,
             break;
         }
 
+        case DrawType::renderPassInitialize:
+        {
+            pipelineState->stencilTestEnabled = false;
+            pipelineState->stencilWriteMask = 0;
+            break;
+        }
+
         case DrawType::interiorTriangulation:
-        case DrawType::atomicInitialize:
-        case DrawType::atomicResolve:
         case DrawType::midpointFanPatches:
         case DrawType::midpointFanCenterAAPatches:
         case DrawType::outerCurvePatches:
+        case DrawType::renderPassResolve:
             RIVE_UNREACHABLE();
     }
 
-    assert(stencilKey != 0);
+    assert(stencilKey != 0 || drawType == DrawType::renderPassInitialize);
     assert(stencilKey < 1 << 4);
     if (effectiveDrawContents.hasActiveClip)
         stencilKey |= (1 << 4);
@@ -1129,11 +1145,11 @@ static CullFace get_cull_face(DrawType drawType)
             return CullFace::clockwise;
         case DrawType::imageRect:
         case DrawType::imageMesh:
-        case DrawType::atomicResolve:
-        case DrawType::atomicInitialize:
         case DrawType::msaaMidpointFanPathsStencil:
         case DrawType::msaaMidpointFanPathsCover:
         case DrawType::msaaOuterCubics:
+        case DrawType::renderPassResolve:
+        case DrawType::renderPassInitialize:
             return CullFace::none;
     }
     RIVE_UNREACHABLE();
@@ -1148,11 +1164,13 @@ static BlendEquation get_blend_equation(
     {
         case InterlockMode::rasterOrdering:
         case InterlockMode::atomics:
-            return flushDesc.atomicFixedFunctionColorOutput
-                       ? BlendEquation::srcOver
-                       : BlendEquation::none;
+        case InterlockMode::clockwise:
+            return flushDesc.fixedFunctionColorOutput ? BlendEquation::srcOver
+                                                      : BlendEquation::none;
 
         case InterlockMode::clockwiseAtomic:
+            // clockwiseAtomic currently ignores fixedFunctionColorOutput.
+            assert(!flushDesc.fixedFunctionColorOutput);
             return BlendEquation::srcOver;
 
         case InterlockMode::msaa:
@@ -1169,6 +1187,7 @@ static BlendEquation get_blend_equation(
                 // When drawing an advanced blend mode, the shader only does the
                 // "color" portion of the blend equation, and relies on the
                 // hardware blend unit to finish the "alpha" portion.
+                assert(batch.drawType != DrawType::renderPassInitialize);
                 return BlendEquation::srcOver;
             }
             else
@@ -1176,6 +1195,7 @@ static BlendEquation get_blend_equation(
                 // When m_platformFeatures.supportsBlendAdvancedKHR is true in
                 // MSAA mode, the renderContext does not combine draws that have
                 // different blend modes.
+                assert(batch.drawType != DrawType::renderPassInitialize);
                 return static_cast<BlendEquation>(batch.firstBlendMode);
             }
     }
@@ -1183,7 +1203,8 @@ static BlendEquation get_blend_equation(
     RIVE_UNREACHABLE();
 }
 
-static bool get_color_writemask(const DrawBatch& batch)
+static bool get_color_writemask(const FlushDescriptor& flushDesc,
+                                const DrawBatch& batch)
 {
     switch (batch.drawType)
     {
@@ -1194,9 +1215,19 @@ static bool get_color_writemask(const DrawBatch& batch)
         case DrawType::atlasBlit:
         case DrawType::imageRect:
         case DrawType::imageMesh:
-        case DrawType::atomicInitialize:
-        case DrawType::atomicResolve:
-            return true;
+        case DrawType::renderPassInitialize:
+        case DrawType::renderPassResolve:
+            if (batch.shaderMiscFlags & (ShaderMiscFlags::clipUpdateOnly |
+                                         ShaderMiscFlags::borrowedCoveragePass))
+            {
+                // Clip updates and borrowed coverage passes don't output color.
+                return false;
+            }
+            // We generate pipeline state under the assumption that pixel local
+            // storage can still be written when colorWriteEnabled is false.
+            // Disable color writes when we're rendering only to PLS.
+            return flushDesc.fixedFunctionColorOutput ||
+                   flushDesc.interlockMode == InterlockMode::msaa;
         case DrawType::msaaStrokes:
         case DrawType::msaaOuterCubics:
             return true;
@@ -1237,9 +1268,13 @@ void get_pipeline_state(const DrawBatch& batch,
             break;
 
         case DrawType::imageRect:
-        case DrawType::atomicResolve:
-        case DrawType::atomicInitialize:
+        case DrawType::renderPassResolve:
             assert(flushDesc.interlockMode == InterlockMode::atomics);
+            break;
+
+        case DrawType::renderPassInitialize:
+            assert(flushDesc.interlockMode == InterlockMode::atomics ||
+                   flushDesc.interlockMode == InterlockMode::msaa);
             break;
 
         case DrawType::msaaStrokes:
@@ -1266,7 +1301,7 @@ void get_pipeline_state(const DrawBatch& batch,
     pipelineState->cullFace = get_cull_face(batch.drawType);
     pipelineState->blendEquation =
         get_blend_equation(flushDesc, batch, platformFeatures);
-    pipelineState->colorWriteEnabled = get_color_writemask(batch);
+    pipelineState->colorWriteEnabled = get_color_writemask(flushDesc, batch);
 
     // Work out a pipeline key (for backends that cache pipelines objects).
     uint32_t key = pipelineState->depthTestEnabled;

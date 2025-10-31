@@ -148,6 +148,8 @@ $typedef $uint ushort;
     NAME.$Sample(SAMPLER_NAME, COORD)
 #define TEXTURE_SAMPLE_LOD(NAME, SAMPLER_NAME, COORD, LOD)                     \
     NAME.$SampleLevel(SAMPLER_NAME, COORD, LOD)
+#define TEXTURE_SAMPLE_LODBIAS(NAME, SAMPLER_NAME, COORD, LODBIAS)             \
+    NAME.$SampleBias(SAMPLER_NAME, COORD, LODBIAS)
 #define TEXTURE_REF_SAMPLE_LOD TEXTURE_SAMPLE_LOD
 #define TEXTURE_SAMPLE_GRAD(NAME, SAMPLER_NAME, COORD, DDX, DDY)               \
     NAME.$SampleGrad(SAMPLER_NAME, COORD, DDX, DDY)
@@ -165,6 +167,8 @@ $typedef $uint ushort;
     TEXTURE_SAMPLE(TEXTURE, SAMPLER_NAME, COORD)
 #define TEXTURE_SAMPLE_DYNAMIC_LOD(TEXTURE, SAMPLER_NAME, COORD, LOD)          \
     TEXTURE_SAMPLE_LOD(TEXTURE, SAMPLER_NAME, COORD, LOD)
+#define TEXTURE_SAMPLE_DYNAMIC_LODBIAS(TEXTURE, SAMPLER_NAME, COORD, LODBIAS)  \
+    TEXTURE_SAMPLE_LODBIAS(TEXTURE, SAMPLER_NAME, COORD, LODBIAS)
 
 #define PLS_INTERLOCK_BEGIN
 #define PLS_INTERLOCK_END
@@ -176,6 +180,8 @@ $typedef $uint ushort;
 #endif
 
 #define PLS_BLOCK_BEGIN
+#define PLS_BLOCK_END
+
 #ifdef @ENABLE_TYPED_UAV_LOAD_STORE
 #define PLS_DECL4F(IDX, NAME) uniform PLS_TEX2D<UNORM half4> NAME
 #else
@@ -183,10 +189,19 @@ $typedef $uint ushort;
 #endif
 #define PLS_DECL4F_READONLY PLS_DECL4F
 #define PLS_DECLUI(IDX, NAME) uniform PLS_TEX2D<uint> NAME
+
+#define PLS_LOADUI_ATOMIC PLS_LOADUI
+#define PLS_STOREUI_ATOMIC PLS_STOREUI
+
+#if $COMPILER_METAL
+#define PLS_DECLUI_ATOMIC(IDX, NAME) uniform $RWBuffer<uint> NAME
+#define PLS_LOADUI_ATOMIC(PLANE) PLANE[_plsIdx]
+#define PLS_STOREUI_ATOMIC(PLANE, VALUE) PLANE[_plsIdx] = VALUE
+#else
 #define PLS_DECLUI_ATOMIC PLS_DECLUI
 #define PLS_LOADUI_ATOMIC PLS_LOADUI
 #define PLS_STOREUI_ATOMIC PLS_STOREUI
-#define PLS_BLOCK_END
+#endif // COMPILER_METAL
 
 #ifdef @ENABLE_TYPED_UAV_LOAD_STORE
 #define PLS_LOAD4F(PLANE) PLANE[_plsCoord]
@@ -201,6 +216,25 @@ $typedef $uint ushort;
 #endif
 #define PLS_STOREUI(PLANE, VALUE) PLANE[_plsCoord] = (VALUE)
 
+#if $COMPILER_METAL
+INLINE uint pls_atomic_max($RWBuffer<uint> plane, uint _plsIdx, uint x)
+{
+    uint originalValue;
+    $InterlockedMax(plane[_plsIdx], x, originalValue);
+    return originalValue;
+}
+
+#define PLS_ATOMIC_MAX(PLANE, X) pls_atomic_max(PLANE, _plsIdx, X)
+
+INLINE uint pls_atomic_add($RWBuffer<uint> plane, uint _plsIdx, uint x)
+{
+    uint originalValue;
+    $InterlockedAdd(plane[_plsIdx], x, originalValue);
+    return originalValue;
+}
+
+#define PLS_ATOMIC_ADD(PLANE, X) pls_atomic_add(PLANE, _plsIdx, X)
+#else
 INLINE uint pls_atomic_max(PLS_TEX2D<uint> plane, int2 _plsCoord, uint x)
 {
     uint originalValue;
@@ -218,6 +252,7 @@ INLINE uint pls_atomic_add(PLS_TEX2D<uint> plane, int2 _plsCoord, uint x)
 }
 
 #define PLS_ATOMIC_ADD(PLANE, X) pls_atomic_add(PLANE, _plsCoord, X)
+#endif
 
 #define PLS_PRESERVE_4F(PLANE)
 #define PLS_PRESERVE_UI(PLANE)
@@ -265,7 +300,10 @@ INLINE uint pls_atomic_add(PLS_TEX2D<uint> plane, int2 _plsCoord, uint x)
 
 #define FRAG_DATA_MAIN(DATA_TYPE, NAME)                                        \
     DATA_TYPE NAME(Varyings _varyings) : $SV_Target                            \
-    {
+    {                                                                          \
+        float2 _fragCoord = _varyings._pos.xy;                                 \
+        int2 _plsCoord = int2(floor(_fragCoord));                              \
+        uint _plsIdx = _plsCoord.y * uniforms.renderTargetWidth + _plsCoord.x;
 
 #define EMIT_FRAG_DATA(VALUE)                                                  \
     return VALUE;                                                              \
@@ -281,7 +319,8 @@ INLINE uint pls_atomic_add(PLS_TEX2D<uint> plane, int2 _plsCoord, uint x)
     EARLYDEPTHSTENCIL void NAME(Varyings _varyings)                            \
     {                                                                          \
         float2 _fragCoord = _varyings._pos.xy;                                 \
-        int2 _plsCoord = int2(floor(_fragCoord));
+        int2 _plsCoord = int2(floor(_fragCoord));                              \
+        uint _plsIdx = _plsCoord.y * uniforms.renderTargetWidth + _plsCoord.x;
 
 #define PLS_MAIN_WITH_IMAGE_UNIFORMS(NAME) PLS_MAIN(NAME)
 
@@ -292,6 +331,7 @@ INLINE uint pls_atomic_add(PLS_TEX2D<uint> plane, int2 _plsCoord, uint x)
     {                                                                          \
         float2 _fragCoord = _varyings._pos.xy;                                 \
         int2 _plsCoord = int2(floor(_fragCoord));                              \
+        uint _plsIdx = _plsCoord.y * uniforms.renderTargetWidth + _plsCoord.x; \
         half4 _fragColor;
 
 #define PLS_FRAG_COLOR_MAIN_WITH_IMAGE_UNIFORMS(NAME) PLS_FRAG_COLOR_MAIN(NAME)

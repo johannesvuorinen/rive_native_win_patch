@@ -29,6 +29,9 @@ final Pointer<Void> Function(Pointer<Void>) _nativeTexture = nativeLib
 
 base class _NativeRenderTexture extends RenderTexture {
   @override
+  int get textureId => _textureId;
+
+  @override
   Pointer<Void> get nativeTexture => _nativeTexture(_rendererPtr);
 
   final MethodChannel methodChannel;
@@ -43,6 +46,7 @@ base class _NativeRenderTexture extends RenderTexture {
   @override
   void dispose() {
     if (_textureId != -1) {
+      _allTextures.remove(_textureId);
       _disposeTexture(_textureId);
       _textureId = -1;
     }
@@ -53,8 +57,12 @@ base class _NativeRenderTexture extends RenderTexture {
   int _actualWidth = 0;
   int _actualHeight = 0;
 
+  @override
   int get actualWidth => _actualWidth;
+  @override
   int get actualHeight => _actualHeight;
+
+  @override
   bool needsResize(int width, int height) =>
       width != _width || height != _height;
 
@@ -82,7 +90,10 @@ base class _NativeRenderTexture extends RenderTexture {
     _disposeTimer = Timer(const Duration(seconds: 1), _disposeTextures);
   }
 
+  @override
   Future<void> makeRenderTexture(int width, int height) async {
+    assert(width >= 0 && height >= 0,
+        'Rive render texture width and height must be greater than or equal to 0. Width: $width, Height: $height');
     // Immediately update cached values in-case we redraw during udpate.
     _width = width;
     _height = height;
@@ -237,18 +248,15 @@ class _RiveNativeView extends LeafRenderObjectWidget {
   }
 }
 
-class _RiveNativeViewRenderObject
-    extends RiveNativeRenderBox<RenderTexturePainter>
+class _RiveNativeViewRenderObject extends RiveNativeRenderBox
     with WidgetsBindingObserver {
-  _NativeRenderTexture _renderTexture;
-
   _RiveNativeViewRenderObject(
-    this._renderTexture,
+    super._renderTexture,
     RenderTexturePainter? renderTexturePainter,
   ) {
     painter = renderTexturePainter;
 
-    //add an observer to monitor the widget lyfecycle changes
+    // Add an observer to monitor the widget lifecycle changes
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -257,130 +265,100 @@ class _RiveNativeViewRenderObject
     super.didChangeAppLifecycleState(state);
 
     if (state == AppLifecycleState.resumed) {
+      restartTickerIfStopped();
       markNeedsLayout();
     }
   }
 
   @override
   void dispose() {
-    super.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
-  bool get shouldAdvance => _shouldAdvance;
-  bool _shouldAdvance = false;
+  ui.Size get desiredSize => ui.Size(
+        renderTexture.actualWidth.toDouble() / scaleWidth,
+        renderTexture.actualHeight.toDouble() / scaleHeight,
+      );
 
-  @override
-  void frameCallback(Duration duration) {
-    super.frameCallback(duration);
-    _paintTexture(elapsedSeconds);
-  }
-
-  void _paintTexture(double elapsedSeconds, {bool forceShouldAdvance = false}) {
-    final painter = rivePainter;
-    if (painter == null || !renderTexture.isReady || !hasSize) {
-      return;
-    }
-    final width = (size.width * devicePixelRatio).roundToDouble();
-    final height = (size.height * devicePixelRatio).roundToDouble();
-    if (!_renderTexture.clear(painter.background, painter.clear)) {
-      markNeedsPaint();
-      return;
-    }
-    final shouldAdvance = painter.paint(
-      _renderTexture,
-      devicePixelRatio,
-      ui.Size(width, height),
-      elapsedSeconds,
-    );
-    if (shouldAdvance && shouldAdvance != _shouldAdvance) {
-      restartTickerIfStopped();
-    }
-    _shouldAdvance = forceShouldAdvance == true || shouldAdvance;
-    if (!_renderTexture.flush(devicePixelRatio)) {
-      markNeedsPaint();
-      return;
-    }
-    if (painter.paintsCanvas) {
-      markNeedsPaint();
-    }
-  }
-
-  _NativeRenderTexture get renderTexture => _renderTexture;
-  set renderTexture(_NativeRenderTexture value) {
-    if (_renderTexture == value) {
-      return;
-    }
-    _renderTexture = value;
-    markNeedsPaint();
-  }
-
-  // TODO (Gordon): This needs to be tested for Android once the Rive Renderer
-  // is working there. The `freeze` option that is set for `context.addLayer`
-  // I believe is only relevant for Android.
-  var _isResizing = false;
+  bool _isCreatingTexture = false;
+  bool _markNeedsTextureCreation = false;
 
   @override
   void performLayout() {
-    final width = (size.width * devicePixelRatio).round();
-    final height = (size.height * devicePixelRatio).round();
-    if (_renderTexture.needsResize(width, height) ||
-        _renderTexture.isDisposed) {
-      _isResizing = true;
-      // TODO (Gordon): Maybe this can be a cancelable future if we're
-      // laying out continuously
-      _renderTexture.makeRenderTexture(width, height).then((_) {
+    super.performLayout();
+    if (owner == null || !attached) {
+      return;
+    }
+
+    // If we're busy creating the texture, we mark it as needing to be created
+    // again, and exit early to avoid unnecessary texture creation while resizing.
+    if (_isCreatingTexture) {
+      _markNeedsTextureCreation = true;
+      return;
+    }
+
+    final width =
+        (size.width * devicePixelRatio * desiredTransformWidthScale).round();
+    final height =
+        (size.height * devicePixelRatio * desiredTransformHeightScale).round();
+
+    if (renderTexture.needsResize(width, height) || renderTexture.isDisposed) {
+      _isCreatingTexture = true;
+      renderTexture.makeRenderTexture(width, height).then((_) {
         // Check if the render object is still attached and not disposed
         if (!attached) {
           return;
         }
-        _isResizing = false;
+        // _actualTransformWidthScale = desiredTransformWidthScale;
+        // _actualTranformHeightScale = desiredTransformHeightScale;
         rivePainter?.textureChanged();
-        _renderTexture.textureChanged();
+        renderTexture.textureChanged();
         // Force the advance as sometimes advancing a state machine
         // by 0 will return false. This results in the graphic settling
         // prematurely when the window/widget is resized, or re enetering from
         // a background state (Android).
-        _paintTexture(0, forceShouldAdvance: true);
+        paintTexture(0, forceShouldAdvance: true);
         // Texture id will have changed...
         markNeedsPaint();
+
+        // A new layout was requested while the texture was being created
+        // so we need to create the latest.
+        if (_markNeedsTextureCreation) {
+          markNeedsLayout();
+        }
+        _isCreatingTexture = false;
+        _markNeedsTextureCreation = false;
+      }).onError((error, stackTrace) {
+        debugPrint('$error $stackTrace');
+        _isCreatingTexture = false;
+        _markNeedsTextureCreation = false;
       });
-      // TODO (Gordon): This may not be needed
-      // Forces an extra call to markNeedsPaint to help when resizing
-      // while the future is completing.
-      markNeedsPaint();
     }
   }
 
   @override
   ui.Size computeDryLayout(BoxConstraints constraints) => constraints.smallest;
 
-  // QUESTION (GORDON): Looks like this is needed when doing `context.addLayer`.
   @override
   bool get alwaysNeedsCompositing => true;
 
   @override
-  bool get isRepaintBoundary => true;
-
-  @override
   void paint(PaintingContext context, Offset offset) {
-    if (!_renderTexture.isReady) {
+    super.paint(context, offset);
+
+    if (!renderTexture.isReady) {
       return;
     }
     context.addLayer(
       TextureLayer(
-        rect: Rect.fromLTWH(
-          offset.dx,
-          offset.dy,
-          _renderTexture.actualWidth.toDouble() / devicePixelRatio,
-          _renderTexture.actualHeight.toDouble() / devicePixelRatio,
-        ),
-        textureId: _renderTexture._textureId,
-        freeze: _isResizing,
+        rect: Rect.fromLTWH(offset.dx, offset.dy, size.width, size.height),
+        textureId: renderTexture.textureId,
         filterQuality: FilterQuality.low,
       ),
     );
+
     final painter = rivePainter;
     if (painter != null && painter.paintsCanvas) {
       painter.paintCanvas(context.canvas, offset, size);

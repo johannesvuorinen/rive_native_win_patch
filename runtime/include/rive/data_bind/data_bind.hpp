@@ -10,8 +10,9 @@
 #include <stdio.h>
 namespace rive
 {
-class File;
 class DataBindContextValue;
+class DataBindContainer;
+class File;
 #ifdef WITH_RIVE_TOOLS
 class DataBind;
 typedef void (*DataBindChanged)();
@@ -24,6 +25,7 @@ public:
     StatusCode import(ImportStack& importStack) override;
     virtual void updateSourceBinding(bool invalidate = false);
     virtual void update(ComponentDirt value);
+    void updateDependents();
     Core* target() const { return m_target; };
     void target(Core* value) { m_target = value; };
     virtual void bind();
@@ -39,10 +41,16 @@ public:
     bool toSource();
     bool toTarget();
     bool canSkip();
+    bool isMainToSource();
+    bool sourceToTargetRunsFirst();
     bool advance(float elapsedTime);
     void suppressDirt(bool value) { m_suppressDirt = value; };
-    void file(File* value) { m_file = value; };
-    File* file() const { return m_file; };
+    void file(File* value);
+    File* file() const;
+    DataType outputType();
+    DataType sourceOutputType();
+    void container(DataBindContainer*);
+    DataBindContainer* m_container = nullptr;
 
 protected:
     ComponentDirt m_Dirt = ComponentDirt::Filthy;
@@ -50,8 +58,6 @@ protected:
     ViewModelInstanceValue* m_Source = nullptr;
     DataBindContextValue* m_ContextValue = nullptr;
     DataConverter* m_dataConverter = nullptr;
-    DataType outputType();
-    DataType sourceOutputType();
     bool bindsOnce();
     bool m_suppressDirt = false;
     File* m_file;

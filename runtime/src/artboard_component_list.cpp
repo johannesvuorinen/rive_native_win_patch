@@ -197,13 +197,41 @@ void ArtboardComponentList::linkStateMachineToArtboard(
         // TODO: @hernan added this to make sure data binds are procesed in the
         // current frame instead of waiting for the next run. But might not be
         // necessary. Needs more testing.
-        stateMachineInstance->updateDataBinds();
+        stateMachineInstance->updateDataBinds(false);
     }
+}
+
+bool ArtboardComponentList ::listsAreEqual(
+    std::vector<rcp<ViewModelInstanceListItem>>* list,
+    std::vector<rcp<ViewModelInstanceListItem>>* compared)
+{
+    if (!list || !compared)
+    {
+        return false;
+    }
+    if (list->size() != compared->size())
+    {
+        return false;
+    }
+    size_t index = 0;
+    for (auto& item : *list)
+    {
+        if (item != (*compared)[index])
+        {
+            return false;
+        }
+        ++index;
+    }
+    return true;
 }
 
 void ArtboardComponentList::updateList(
     std::vector<rcp<ViewModelInstanceListItem>>* list)
 {
+    if (listsAreEqual(&m_oldItems, list))
+    {
+        return;
+    }
     m_oldItems.clear();
     m_oldItems.assign(m_listItems.begin(), m_listItems.end());
     m_listItems.clear();
@@ -299,7 +327,8 @@ bool ArtboardComponentList::advanceComponent(float elapsedSeconds,
                 // finally settle in the same value
                 if (!newFrame)
                 {
-                    if (stateMachine->tryChangeState())
+                    if (stateMachine->tryChangeState() ||
+                        stateMachine->needsAdvance())
                     {
                         if (stateMachine->advance(elapsedSeconds, newFrame))
                         {
@@ -638,7 +667,7 @@ void ArtboardComponentList::updateDataBinds()
         auto stateMachine = stateMachineInstance(i);
         if (stateMachine != nullptr)
         {
-            stateMachine->updateDataBinds();
+            stateMachine->updateDataBinds(false);
         }
         auto artboard = artboardInstance(i);
         if (artboard != nullptr)

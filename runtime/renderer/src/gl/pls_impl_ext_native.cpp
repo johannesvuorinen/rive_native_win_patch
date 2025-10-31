@@ -10,7 +10,7 @@
 #include "shaders/constants.glsl"
 #include <sstream>
 
-#include "generated/shaders/pls_load_store_ext.exports.h"
+#include "generated/shaders/pls_load_store_ext.glsl.exports.h"
 
 namespace rive::gpu
 {
@@ -78,14 +78,24 @@ public:
 
     void init(rcp<GLState> state) override { m_state = std::move(state); }
 
-    bool supportsRasterOrdering(const GLCapabilities&) const override
+    void getSupportedInterlockModes(
+        const GLCapabilities& capabilities,
+        PlatformFeatures* platformFeatures) const override
     {
-        return true;
+        assert(capabilities.EXT_shader_pixel_local_storage);
+        platformFeatures->supportsRasterOrderingMode = true;
     }
-    bool supportsFragmentShaderAtomics(
-        const GLCapabilities& capabilities) const override
+
+    void applyPipelineStateOverrides(
+        const DrawBatch&,
+        const FlushDescriptor&,
+        const PlatformFeatures&,
+        PipelineState* pipelineState) const override
     {
-        return false;
+        // Vivo Y21 and Oppo Reno 3 Pro both disable writes to pixel local
+        // storage when the color mask is off; just leave the color mask enabled
+        // in EXT_shader_pixel_local_storage mode.
+        pipelineState->colorWriteEnabled = true;
     }
 
     void activatePixelLocalStorage(RenderContextGLImpl* impl,
@@ -124,7 +134,7 @@ public:
                          clearColor4f.data());
         }
         m_state->bindVAO(m_plsLoadStoreVAO);
-        m_state->setCullFace(GL_NONE);
+        m_state->setPipelineState(gpu::COLOR_ONLY_PIPELINE_STATE);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
@@ -137,7 +147,7 @@ public:
         m_state->bindProgram(
             findLoadStoreProgram(actions, desc.combinedShaderFeatures).id());
         m_state->bindVAO(m_plsLoadStoreVAO);
-        m_state->setCullFace(GL_NONE);
+        m_state->setPipelineState(gpu::COLOR_ONLY_PIPELINE_STATE);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         glDisable(GL_SHADER_PIXEL_LOCAL_STORAGE_EXT);

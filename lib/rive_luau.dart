@@ -111,6 +111,13 @@ abstract class ScriptedRenderer {
   void end();
 }
 
+abstract class ScriptedDataValue {
+  String get type;
+  double numberValue();
+  String stringValue();
+  bool booleanValue();
+}
+
 abstract class LuauState {
   void dispose();
   static LuauState init(Factory riveFactory) {
@@ -123,6 +130,7 @@ abstract class LuauState {
   String stringAt(int index);
   LuauType typeAt(int index);
   bool booleanAt(int index);
+  Vec2D vectorAt(int index);
 
   bool isNil(int index) => typeAt(index) == LuauType.nil;
   bool isBoolean(int index) => typeAt(index) == LuauType.boolean;
@@ -137,10 +145,12 @@ abstract class LuauState {
   bool isBuffer(int index) => typeAt(index) == LuauType.buffer;
 
   void pushNil();
+  void pushBoolean(bool value);
   void pushNumber(double value);
   void pushInteger(int value);
   void pushUnsigned(int value);
   void pushString(String value);
+  void pushVector(Vec2D value);
   void pushFunction(LuauFunction t, {String debugName = 'unknown'});
   ScriptedRenderer pushRenderer(Renderer renderer);
   void pushArtboard(Artboard artboard);
@@ -212,6 +222,7 @@ abstract class LuauState {
   bool registerModule(String name, Uint8List bytecode);
   void unregisterModule(String name);
   bool registerScript(String name, Uint8List bytecode);
+  void registerStateWithFile(File file);
 
   void call(int numArgs, int numResults);
   LuauStatus pcall(int numArgs, int numResults);
@@ -228,4 +239,10 @@ abstract class LuauState {
   final consoleHasData = ChangeNotifier();
   bool readConsole(List<ConsoleEntry> entries);
   void writeConsole(ConsoleEntry entry);
+
+  // Data converter methods
+  ScriptedDataValue pushDataValueNumber(double value);
+  ScriptedDataValue pushDataValueString(String value);
+  ScriptedDataValue pushDataValueBoolean(bool value);
+  ScriptedDataValue dataValueAt(int index);
 }

@@ -146,6 +146,7 @@ class _ExampleBasicState extends State<ExampleDataBindingArtboards> {
                         style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
+                      // ignore: deprecated_member_use
                       value: selectedArtboard1,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
@@ -175,6 +176,7 @@ class _ExampleBasicState extends State<ExampleDataBindingArtboards> {
                         style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
+                      // ignore: deprecated_member_use
                       value: selectedArtboard2,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),

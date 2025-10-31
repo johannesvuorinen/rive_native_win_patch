@@ -4,18 +4,7 @@
 #include "rive/renderer/d3d12/d3d12_pipeline_manager.hpp"
 #include "rive/renderer/d3d/d3d_constants.hpp"
 
-#include "generated/shaders/advanced_blend.glsl.hpp"
-#include "generated/shaders/atomic_draw.glsl.hpp"
-#include "generated/shaders/color_ramp.glsl.hpp"
-#include "generated/shaders/constants.glsl.hpp"
-#include "generated/shaders/common.glsl.hpp"
-#include "generated/shaders/draw_image_mesh.glsl.hpp"
-#include "generated/shaders/draw_path_common.glsl.hpp"
-#include "generated/shaders/draw_path.glsl.hpp"
-#include "generated/shaders/hlsl.glsl.hpp"
-#include "generated/shaders/bezier_utils.glsl.hpp"
-#include "generated/shaders/render_atlas.glsl.hpp"
-#include "generated/shaders/tessellate.glsl.hpp"
+#include "generated/shaders/tessellate.glsl.exports.h"
 
 // offline shaders
 namespace shader
@@ -71,17 +60,16 @@ D3D12PipelineManager::D3D12PipelineManager(
                                             IID_PPV_ARGS(&m_rootSignature)));
 }
 
-D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
-    DrawType drawType,
-    ComPtr<ID3DBlob> blob)
+std::unique_ptr<D3D12DrawVertexShader> D3D12PipelineManager::
+    compileVertexShaderBlobToFinalType(DrawType drawType, ComPtr<ID3DBlob> blob)
 {
-    D3D12DrawVertexShader result;
+    auto result = std::make_unique<D3D12DrawVertexShader>();
     switch (drawType)
     {
         case DrawType::midpointFanPatches:
         case DrawType::midpointFanCenterAAPatches:
         case DrawType::outerCurvePatches:
-            result.m_layoutDesc[0] = {
+            result->m_layoutDesc[0] = {
                 GLSL_a_patchVertexData,
                 0,
                 DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -89,7 +77,7 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 D3D12_APPEND_ALIGNED_ELEMENT,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_layoutDesc[1] = {
+            result->m_layoutDesc[1] = {
                 GLSL_a_mirroredVertexData,
                 0,
                 DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -97,11 +85,11 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 D3D12_APPEND_ALIGNED_ELEMENT,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_vertexAttribCount = 2;
+            result->m_vertexAttribCount = 2;
             break;
         case DrawType::interiorTriangulation:
         case DrawType::atlasBlit:
-            result.m_layoutDesc[0] = {
+            result->m_layoutDesc[0] = {
                 GLSL_a_triangleVertex,
                 0,
                 DXGI_FORMAT_R32G32B32_FLOAT,
@@ -109,10 +97,10 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 0,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_vertexAttribCount = 1;
+            result->m_vertexAttribCount = 1;
             break;
         case DrawType::imageRect:
-            result.m_layoutDesc[0] = {
+            result->m_layoutDesc[0] = {
                 GLSL_a_imageRectVertex,
                 0,
                 DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -120,10 +108,10 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 0,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_vertexAttribCount = 1;
+            result->m_vertexAttribCount = 1;
             break;
         case DrawType::imageMesh:
-            result.m_layoutDesc[0] = {
+            result->m_layoutDesc[0] = {
                 GLSL_a_position,
                 0,
                 DXGI_FORMAT_R32G32_FLOAT,
@@ -131,7 +119,7 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 D3D12_APPEND_ALIGNED_ELEMENT,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_layoutDesc[1] = {
+            result->m_layoutDesc[1] = {
                 GLSL_a_texCoord,
                 0,
                 DXGI_FORMAT_R32G32_FLOAT,
@@ -139,12 +127,11 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
                 D3D12_APPEND_ALIGNED_ELEMENT,
                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
                 0};
-            result.m_vertexAttribCount = 2;
+            result->m_vertexAttribCount = 2;
             break;
-        case DrawType::atomicResolve:
-            result.m_vertexAttribCount = 0;
+        case DrawType::renderPassResolve:
+            result->m_vertexAttribCount = 0;
             break;
-        case DrawType::atomicInitialize:
         case DrawType::msaaStrokes:
         case DrawType::msaaMidpointFanBorrowedCoverage:
         case DrawType::msaaMidpointFans:
@@ -153,16 +140,26 @@ D3D12DrawVertexShader D3D12PipelineManager::compileVertexShaderBlobToFinalType(
         case DrawType::msaaMidpointFanPathsCover:
         case DrawType::msaaOuterCubics:
         case DrawType::msaaStencilClipReset:
+        case DrawType::renderPassInitialize:
             RIVE_UNREACHABLE();
     }
 
-    result.m_shader = blob;
+    result->m_shader = blob;
     return result;
 }
 
-D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
-                                                 D3D12DrawVertexShader&& vs,
-                                                 ComPtr<ID3DBlob>&& ps)
+std::unique_ptr<D3D12DrawPixelShader> D3D12PipelineManager::
+    compilePixelShaderBlobToFinalType(ComPtr<ID3DBlob> blob)
+{
+    auto result = std::make_unique<D3D12DrawPixelShader>();
+    result->m_shader = std::move(blob);
+    return result;
+}
+
+std::unique_ptr<D3D12Pipeline> D3D12PipelineManager::linkPipeline(
+    const PipelineProps& props,
+    const D3D12DrawVertexShader& vs,
+    const D3D12DrawPixelShader& ps)
 {
     ComPtr<ID3D12PipelineState> pipelineState;
 
@@ -187,10 +184,9 @@ D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
             break;
         case DrawType::imageRect:
         case DrawType::imageMesh:
-        case DrawType::atomicResolve:
+        case DrawType::renderPassResolve:
             rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
             break;
-        case DrawType::atomicInitialize:
         case DrawType::msaaStrokes:
         case DrawType::msaaMidpointFanBorrowedCoverage:
         case DrawType::msaaMidpointFans:
@@ -199,6 +195,7 @@ D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
         case DrawType::msaaMidpointFanPathsCover:
         case DrawType::msaaOuterCubics:
         case DrawType::msaaStencilClipReset:
+        case DrawType::renderPassInitialize:
             break;
     }
 
@@ -222,7 +219,7 @@ D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
     psoDesc.InputLayout = {vs.m_layoutDesc, vs.m_vertexAttribCount};
     psoDesc.pRootSignature = m_rootSignature.Get();
     psoDesc.VS = CD3DX12_SHADER_BYTECODE(vs.m_shader.Get());
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(ps.Get());
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(ps.m_shader.Get());
     psoDesc.RasterizerState = rasterDesc;
     psoDesc.BlendState = blendDesc;
     psoDesc.DepthStencilState.DepthEnable = FALSE;
@@ -233,7 +230,7 @@ D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.SampleDesc.Count = 1;
 
-    D3D12Pipeline result;
+    auto result = std::make_unique<D3D12Pipeline>();
 #ifdef WITH_RIVE_TOOLS
     if (props.synthesizedFailureType ==
             SynthesizedFailureType::pipelineCreation ||
@@ -247,7 +244,7 @@ D3D12Pipeline D3D12PipelineManager::linkPipeline(const PipelineProps& props,
 
     VERIFY_OK(device()->CreateGraphicsPipelineState(
         &psoDesc,
-        IID_PPV_ARGS(&result.m_d3dPipelineState)));
+        IID_PPV_ARGS(&result->m_d3dPipelineState)));
     return result;
 }
 

@@ -97,12 +97,20 @@ abstract base class RenderTexturePainter extends RivePainter {
 }
 
 abstract base class RenderTexture {
+  int get textureId;
   dynamic get nativeTexture;
   Widget widget({RenderTexturePainter? painter, Key? key});
   void dispose();
 
   bool clear(Color color, [bool write = true]);
   bool flush(double devicePixelRatio);
+
+  int get actualWidth;
+  int get actualHeight;
+
+  bool needsResize(int width, int height);
+  Future<void> makeRenderTexture(int width, int height);
+
   bool get isReady;
   bool get isDisposed;
   Renderer get renderer;
@@ -116,6 +124,64 @@ abstract base class RenderTexture {
   }
 
   void textureChanged() => _textureChangedCallback?.call();
+}
+
+final class UnimplementedRenderTexture extends RenderTexture {
+  @override
+  bool clear(Color color, [bool write = true]) {
+    return true;
+  }
+
+  @override
+  void dispose() {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool flush(double devicePixelRatio) {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool get isDisposed => throw UnimplementedError();
+
+  @override
+  bool get isReady => throw UnimplementedError();
+
+  @override
+  get nativeTexture => throw UnimplementedError();
+
+  @override
+  Renderer get renderer => throw UnimplementedError();
+
+  @override
+  Future<ui.Image> toImage() {
+    throw UnimplementedError();
+  }
+
+  @override
+  Widget widget({RenderTexturePainter? painter, Key? key}) {
+    throw UnimplementedError();
+  }
+
+  @override
+  int get actualHeight => throw UnimplementedError();
+
+  @override
+  int get actualWidth => throw UnimplementedError();
+
+  @override
+  Future<void> makeRenderTexture(int width, int height) {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool needsResize(int width, int height) {
+    throw UnimplementedError();
+  }
+
+  @override
+  int get textureId => throw UnimplementedError();
 }
 
 abstract class RiveNative {

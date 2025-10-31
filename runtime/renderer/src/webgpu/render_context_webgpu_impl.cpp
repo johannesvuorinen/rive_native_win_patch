@@ -8,8 +8,8 @@
 
 #include <string>
 
-#include "generated/shaders/spirv/blit_texture_as_draw.vert.h"
-#include "generated/shaders/spirv/blit_texture_as_draw.frag.h"
+#include "generated/shaders/spirv/blit_texture_as_draw_filtered.vert.h"
+#include "generated/shaders/spirv/blit_texture_as_draw_filtered.frag.h"
 #include "generated/shaders/spirv/color_ramp.vert.h"
 #include "generated/shaders/spirv/color_ramp.frag.h"
 #include "generated/shaders/spirv/tessellate.vert.h"
@@ -54,6 +54,8 @@ using TextureDataLayout = TexelCopyBufferLayout;
 }; // namespace wgpu
 #endif
 
+constexpr static auto RIVE_FRONT_FACE = wgpu::FrontFace::CW;
+
 #ifdef RIVE_WAGYU
 #include <webgpu/webgpu_wagyu.h>
 
@@ -67,9 +69,11 @@ using TextureDataLayout = TexelCopyBufferLayout;
 #include "generated/shaders/tessellate.glsl.hpp"
 #include "generated/shaders/render_atlas.glsl.hpp"
 #include "generated/shaders/advanced_blend.glsl.hpp"
-#include "generated/shaders/draw_path.glsl.hpp"
 #include "generated/shaders/draw_path_common.glsl.hpp"
-#include "generated/shaders/draw_image_mesh.glsl.hpp"
+#include "generated/shaders/draw_path.vert.hpp"
+#include "generated/shaders/draw_raster_order_path.frag.hpp"
+#include "generated/shaders/draw_image_mesh.vert.hpp"
+#include "generated/shaders/draw_raster_order_mesh.frag.hpp"
 
 // When compiling "glslRaw" shaders, the WebGPU driver will automatically
 // search for a uniform with this name and update its value when draw commands
@@ -199,7 +203,7 @@ public:
             .primitive =
                 {
                     .topology = wgpu::PrimitiveTopology::TriangleStrip,
-                    .frontFace = context->frontFaceForRenderTargetDraws(),
+                    .frontFace = RIVE_FRONT_FACE,
                     .cullMode = wgpu::CullMode::None,
                 },
             .fragment = &fragmentState,
@@ -339,7 +343,7 @@ public:
             .primitive =
                 {
                     .topology = wgpu::PrimitiveTopology::TriangleStrip,
-                    .frontFace = kFrontFaceForOffscreenDraws,
+                    .frontFace = RIVE_FRONT_FACE,
                     .cullMode = wgpu::CullMode::None,
                 },
             .fragment = &fragmentState,
@@ -497,7 +501,7 @@ public:
             .primitive =
                 {
                     .topology = wgpu::PrimitiveTopology::TriangleList,
-                    .frontFace = kFrontFaceForOffscreenDraws,
+                    .frontFace = RIVE_FRONT_FACE,
                     .cullMode = wgpu::CullMode::None,
                 },
             .fragment = &fragmentState,
@@ -677,7 +681,7 @@ public:
             .primitive =
                 {
                     .topology = wgpu::PrimitiveTopology::TriangleList,
-                    .frontFace = kFrontFaceForOffscreenDraws,
+                    .frontFace = RIVE_FRONT_FACE,
                     .cullMode = wgpu::CullMode::Back,
                 },
             .fragment = &fragmentState,
@@ -709,7 +713,8 @@ class RenderContextWebGPUImpl::DrawPipeline
 public:
     DrawPipeline(RenderContextWebGPUImpl* context,
                  DrawType drawType,
-                 gpu::ShaderFeatures shaderFeatures)
+                 gpu::ShaderFeatures shaderFeatures,
+                 bool targetIsGLFBO0)
     {
         wgpu::ShaderModule vertexShader, fragmentShader;
 #ifdef RIVE_WAGYU
@@ -730,7 +735,7 @@ public:
             {
                 language = WGPUWagyuShaderLanguage_GLSLRAW;
                 versionString = "#version 310 es";
-                if (context->m_contextOptions.invertRenderTargetY)
+                if (!targetIsGLFBO0)
                 {
                     addDefine(GLSL_POST_INVERT_Y);
                 }
@@ -778,11 +783,11 @@ public:
                 case DrawType::outerCurvePatches:
                     addDefine(GLSL_ENABLE_INSTANCE_INDEX);
                     break;
-                case DrawType::atlasBlit:
-                    addDefine(GLSL_ATLAS_BLIT);
-                    [[fallthrough]];
                 case DrawType::interiorTriangulation:
                     addDefine(GLSL_DRAW_INTERIOR_TRIANGLES);
+                    break;
+                case DrawType::atlasBlit:
+                    addDefine(GLSL_ATLAS_BLIT);
                     break;
                 case DrawType::imageRect:
                     addDefine(GLSL_DRAW_IMAGE);
@@ -793,12 +798,12 @@ public:
                     addDefine(GLSL_DRAW_IMAGE);
                     addDefine(GLSL_DRAW_IMAGE_MESH);
                     break;
-                case DrawType::atomicInitialize:
+                case DrawType::renderPassInitialize:
                     addDefine(GLSL_DRAW_RENDER_TARGET_UPDATE_BOUNDS);
                     addDefine(GLSL_INITIALIZE_PLS);
                     RIVE_UNREACHABLE();
                     break;
-                case DrawType::atomicResolve:
+                case DrawType::renderPassResolve:
                     addDefine(GLSL_DRAW_RENDER_TARGET_UPDATE_BOUNDS);
                     addDefine(GLSL_RESOLVE_PLS);
                     RIVE_UNREACHABLE();
@@ -842,19 +847,24 @@ public:
                 case DrawType::outerCurvePatches:
                     addDefine(GLSL_DRAW_PATH);
                     glsl << gpu::glsl::draw_path_common << '\n';
-                    glsl << gpu::glsl::draw_path << '\n';
+                    glsl << gpu::glsl::draw_path_vert << '\n';
+                    glsl << gpu::glsl::draw_raster_order_path_frag << '\n';
                     break;
                 case DrawType::interiorTriangulation:
+                    glsl << gpu::glsl::draw_path_common << '\n';
+                    glsl << gpu::glsl::draw_path_vert << '\n';
+                    glsl << gpu::glsl::draw_raster_order_path_frag << '\n';
+                    break;
                 case DrawType::atlasBlit:
                     glsl << gpu::glsl::draw_path_common << '\n';
-                    glsl << gpu::glsl::draw_path << '\n';
+                    glsl << gpu::glsl::draw_path_vert << '\n';
+                    glsl << gpu::glsl::draw_raster_order_mesh_frag << '\n';
                     break;
                 case DrawType::imageMesh:
-                    glsl << gpu::glsl::draw_image_mesh << '\n';
+                    glsl << gpu::glsl::draw_image_mesh_vert << '\n';
+                    glsl << gpu::glsl::draw_raster_order_mesh_frag << '\n';
                     break;
                 case DrawType::imageRect:
-                case DrawType::atomicInitialize:
-                case DrawType::atomicResolve:
                 case DrawType::msaaStrokes:
                 case DrawType::msaaMidpointFanBorrowedCoverage:
                 case DrawType::msaaMidpointFans:
@@ -863,6 +873,8 @@ public:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
                 case DrawType::msaaStencilClipReset:
+                case DrawType::renderPassInitialize:
+                case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();
                     break;
             }
@@ -935,8 +947,6 @@ public:
                         draw_image_mesh_webgpu_frag,
                         std::size(draw_image_mesh_webgpu_frag));
                     break;
-                case DrawType::atomicInitialize:
-                case DrawType::atomicResolve:
                 case DrawType::msaaStrokes:
                 case DrawType::msaaMidpointFanBorrowedCoverage:
                 case DrawType::msaaMidpointFans:
@@ -945,6 +955,8 @@ public:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
                 case DrawType::msaaStencilClipReset:
+                case DrawType::renderPassInitialize:
+                case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();
             }
         }
@@ -987,7 +999,7 @@ RenderContextWebGPUImpl::RenderContextWebGPUImpl(
 {
     // All backends currently use raster ordered shaders.
     // TODO: update this flag once we have msaa and atomic modes.
-    m_platformFeatures.supportsRasterOrdering = true;
+    m_platformFeatures.supportsRasterOrderingMode = true;
     m_platformFeatures.clipSpaceBottomUp = true;
     m_platformFeatures.framebufferBottomUp = false;
 
@@ -1053,7 +1065,7 @@ static wgpu::FilterMode webgpu_filter_mode(rive::ImageFilter filter)
 {
     switch (filter)
     {
-        case rive::ImageFilter::trilinear:
+        case rive::ImageFilter::bilinear:
             return wgpu::FilterMode::Linear;
         case rive::ImageFilter::nearest:
             return wgpu::FilterMode::Nearest;
@@ -1067,9 +1079,8 @@ static wgpu::MipmapFilterMode webgpu_mipmap_filter_mode(
 {
     switch (filter)
     {
-        case rive::ImageFilter::trilinear:
-            return wgpu::MipmapFilterMode::Linear;
         case rive::ImageFilter::nearest:
+        case rive::ImageFilter::bilinear:
             return wgpu::MipmapFilterMode::Nearest;
     }
 
@@ -1403,10 +1414,6 @@ void RenderContextWebGPUImpl::initGPUObjects()
         glsl << "#define gl_VertexID gl_VertexIndex\n";
         glsl << "#endif\n";
         glsl << "#define " GLSL_ENABLE_CLIPPING " true\n";
-        if (m_contextOptions.invertRenderTargetY)
-        {
-            glsl << "#define " GLSL_POST_INVERT_Y " true\n";
-        }
         BuildLoadStoreEXTGLSL(glsl, LoadStoreActionsEXT::none);
         m_loadStoreEXTVertexShader =
             compile_shader_module_wagyu(m_device,
@@ -1545,8 +1552,10 @@ RenderTargetWebGPU::RenderTargetWebGPU(
     m_scratchColorTextureView = m_scratchColorTexture.CreateView();
 }
 
-void RenderTargetWebGPU::setTargetTextureView(wgpu::TextureView textureView)
+void RenderTargetWebGPU::setTargetTextureView(wgpu::TextureView textureView,
+                                              wgpu::Texture texture)
 {
+    m_targetTexture = texture;
     m_targetTextureView = textureView;
 }
 
@@ -1655,22 +1664,6 @@ rcp<RenderBuffer> RenderContextWebGPUImpl::makeRenderBuffer(
                                             sizeInBytes);
 }
 
-class TextureWebGPUImpl : public Texture
-{
-public:
-    TextureWebGPUImpl(uint32_t width, uint32_t height, wgpu::Texture texture) :
-        Texture(width, height),
-        m_texture(std::move(texture)),
-        m_textureView(m_texture.CreateView())
-    {}
-
-    wgpu::TextureView textureView() const { return m_textureView; }
-
-private:
-    wgpu::Texture m_texture;
-    wgpu::TextureView m_textureView;
-};
-
 #ifndef RIVE_WAGYU
 // Blits texture-to-texture using a draw command.
 class RenderContextWebGPUImpl::BlitTextureAsDrawPipeline
@@ -1682,7 +1675,7 @@ public:
 
         wgpu::BindGroupLayoutEntry bindingEntries[] = {
             {
-                .binding = 0,
+                .binding = IMAGE_TEXTURE_IDX,
                 .visibility = wgpu::ShaderStage::Fragment,
                 .texture =
                     {
@@ -1691,7 +1684,7 @@ public:
                     },
             },
             {
-                .binding = 1,
+                .binding = IMAGE_SAMPLER_IDX,
                 .visibility = wgpu::ShaderStage::Fragment,
                 .sampler =
                     {
@@ -1705,25 +1698,31 @@ public:
             .entries = bindingEntries,
         };
 
-        m_bindGroupLayout = device.CreateBindGroupLayout(&bindingsDesc);
+        m_perDrawBindGroupLayout = device.CreateBindGroupLayout(&bindingsDesc);
+
+        wgpu::BindGroupLayout layouts[] = {
+            impl->m_emptyBindingsLayout,
+            m_perDrawBindGroupLayout,
+        };
+        static_assert(PER_DRAW_BINDINGS_SET == 1);
 
         wgpu::PipelineLayoutDescriptor pipelineLayoutDesc = {
-            .bindGroupLayoutCount = 1,
-            .bindGroupLayouts = &m_bindGroupLayout,
+            .bindGroupLayoutCount = std::size(layouts),
+            .bindGroupLayouts = layouts,
         };
 
         wgpu::PipelineLayout pipelineLayout =
             device.CreatePipelineLayout(&pipelineLayoutDesc);
 
-        wgpu::ShaderModule vertexShader =
-            compile_shader_module_spirv(device,
-                                        blit_texture_as_draw_vert,
-                                        std::size(blit_texture_as_draw_vert));
+        wgpu::ShaderModule vertexShader = compile_shader_module_spirv(
+            device,
+            blit_texture_as_draw_filtered_vert,
+            std::size(blit_texture_as_draw_filtered_vert));
 
-        wgpu::ShaderModule fragmentShader =
-            compile_shader_module_spirv(device,
-                                        blit_texture_as_draw_frag,
-                                        std::size(blit_texture_as_draw_frag));
+        wgpu::ShaderModule fragmentShader = compile_shader_module_spirv(
+            device,
+            blit_texture_as_draw_filtered_frag,
+            std::size(blit_texture_as_draw_filtered_frag));
 
         wgpu::ColorTargetState colorTargetState = {
             .format = wgpu::TextureFormat::RGBA8Unorm,
@@ -1753,14 +1752,14 @@ public:
         m_renderPipeline = device.CreateRenderPipeline(&desc);
     }
 
-    const wgpu::BindGroupLayout& bindGroupLayout() const
+    const wgpu::BindGroupLayout& perDrawBindGroupLayout() const
     {
-        return m_bindGroupLayout;
+        return m_perDrawBindGroupLayout;
     }
     wgpu::RenderPipeline renderPipeline() const { return m_renderPipeline; }
 
 private:
-    wgpu::BindGroupLayout m_bindGroupLayout;
+    wgpu::BindGroupLayout m_perDrawBindGroupLayout;
     wgpu::RenderPipeline m_renderPipeline;
 };
 #endif
@@ -1809,23 +1808,23 @@ void RenderContextWebGPUImpl::generateMipmaps(wgpu::Texture texture)
 
         wgpu::BindGroupEntry bindingEntries[] = {
             {
-                .binding = 0,
+                .binding = IMAGE_TEXTURE_IDX,
                 .textureView = srcView,
             },
             {
-                .binding = 1,
+                .binding = IMAGE_SAMPLER_IDX,
                 .sampler = m_linearSampler,
             },
         };
 
         wgpu::BindGroupDescriptor bindGroupDesc = {
-            .layout = m_blitTextureAsDrawPipeline->bindGroupLayout(),
+            .layout = m_blitTextureAsDrawPipeline->perDrawBindGroupLayout(),
             .entryCount = std::size(bindingEntries),
             .entries = bindingEntries,
         };
 
         wgpu::BindGroup bindings = m_device.CreateBindGroup(&bindGroupDesc);
-        mipPass.SetBindGroup(0, bindings);
+        mipPass.SetBindGroup(PER_DRAW_BINDINGS_SET, bindings);
 
         mipPass.SetPipeline(m_blitTextureAsDrawPipeline->renderPipeline());
         mipPass.Draw(4);
@@ -2194,8 +2193,6 @@ wgpu::RenderPipeline RenderContextWebGPUImpl::makeDrawPipeline(
             vertexBufferLayouts[1].arrayStride = sizeof(float) * 2;
             vertexBufferLayouts[1].stepMode = WGPUVertexStepMode_Vertex;
             break;
-        case DrawType::atomicInitialize:
-        case DrawType::atomicResolve:
         case DrawType::msaaStrokes:
         case DrawType::msaaMidpointFanBorrowedCoverage:
         case DrawType::msaaMidpointFans:
@@ -2204,6 +2201,8 @@ wgpu::RenderPipeline RenderContextWebGPUImpl::makeDrawPipeline(
         case DrawType::msaaMidpointFanPathsCover:
         case DrawType::msaaOuterCubics:
         case DrawType::msaaStencilClipReset:
+        case DrawType::renderPassInitialize:
+        case DrawType::renderPassResolve:
             RIVE_UNREACHABLE();
     }
 
@@ -2316,8 +2315,7 @@ wgpu::RenderPipeline RenderContextWebGPUImpl::makeDrawPipeline(
         .primitive =
             {
                 .topology = WGPUPrimitiveTopology_TriangleList,
-                .frontFace =
-                    static_cast<WGPUFrontFace>(frontFaceForRenderTargetDraws()),
+                .frontFace = static_cast<WGPUFrontFace>(RIVE_FRONT_FACE),
                 .cullMode = DrawTypeIsImageDraw(drawType) ? WGPUCullMode_None
                                                           : WGPUCullMode_Back,
             },
@@ -2946,16 +2944,28 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
         }
 
         // Setup the pipeline for this specific drawType and shaderFeatures.
+        bool targetIsGLFBO0 = false;
+#ifdef RIVE_WAGYU
+        if (m_capabilities.backendType == wgpu::BackendType::OpenGLES)
+        {
+            targetIsGLFBO0 = wgpuWagyuTextureIsSwapchain(
+                renderTarget->m_targetTexture.Get());
+        }
+#endif
+        uint32_t webgpuShaderKey =
+            (gpu::ShaderUniqueKey(drawType,
+                                  batch.shaderFeatures,
+                                  gpu::InterlockMode::rasterOrdering,
+                                  gpu::ShaderMiscFlags::none)
+             << 1) |
+            static_cast<uint32_t>(targetIsGLFBO0);
         const DrawPipeline& drawPipeline =
             m_drawPipelines
-                .try_emplace(
-                    gpu::ShaderUniqueKey(drawType,
-                                         batch.shaderFeatures,
-                                         gpu::InterlockMode::rasterOrdering,
-                                         gpu::ShaderMiscFlags::none),
-                    this,
-                    drawType,
-                    batch.shaderFeatures)
+                .try_emplace(webgpuShaderKey,
+                             this,
+                             drawType,
+                             batch.shaderFeatures,
+                             targetIsGLFBO0)
                 .first->second;
         drawPass.SetPipeline(
             drawPipeline.renderPipeline(renderTarget->framebufferFormat()));
@@ -3002,8 +3012,6 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                 drawPass.DrawIndexed(batch.elementCount, 1, batch.baseElement);
                 break;
             }
-            case DrawType::atomicInitialize:
-            case DrawType::atomicResolve:
             case DrawType::msaaStrokes:
             case DrawType::msaaMidpointFanBorrowedCoverage:
             case DrawType::msaaMidpointFans:
@@ -3012,6 +3020,8 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
             case DrawType::msaaMidpointFanPathsCover:
             case DrawType::msaaOuterCubics:
             case DrawType::msaaStencilClipReset:
+            case DrawType::renderPassInitialize:
+            case DrawType::renderPassResolve:
                 RIVE_UNREACHABLE();
         }
     }

@@ -770,8 +770,7 @@ class TextHelperWeb extends TextHelper {
       );
   @override
   double convertIntToNumber(int value) =>
-      (_convertIntToNumber.callAsFunction(null, value as js.JSNumber)
-              as js.JSNumber)
+      (_convertIntToNumber.callAsFunction(null, value.toJS) as js.JSNumber)
           .toDartDouble;
 }
 

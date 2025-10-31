@@ -293,7 +293,15 @@ ArtboardInstance* CommandServer::getArtboardInstance(
 {
     assert(std::this_thread::get_id() == m_threadID);
     auto it = m_artboards.find(handle);
-    return it != m_artboards.end() ? it->second.get() : nullptr;
+    return it != m_artboards.end() ? it->second.get()->artboard() : nullptr;
+}
+
+rcp<BindableArtboard> CommandServer::getBindableArtboard(
+    ArtboardHandle handle) const
+{
+    assert(std::this_thread::get_id() == m_threadID);
+    auto it = m_artboards.find(handle);
+    return it != m_artboards.end() ? it->second : nullptr;
 }
 
 StateMachineInstance* CommandServer::getStateMachineInstance(
@@ -519,7 +527,7 @@ bool CommandServer::processCommands()
                 if (file != nullptr)
                 {
                     m_fileDependencies[handle] = {};
-                    m_files[handle] = std::move(file);
+                    m_files[handle] = file;
 
                     std::unique_lock<std::mutex> messageLock(
                         m_commandQueue->m_messageMutex);
@@ -823,12 +831,9 @@ bool CommandServer::processCommands()
                 if (rive::File* file = getFile(fileHandle))
                 {
                     if (auto artboard = name.empty()
-                                            ? file->artboardDefault()
-                                            : file->artboardNamed(name))
+                                            ? file->bindableArtboardDefault()
+                                            : file->bindableArtboardNamed(name))
                     {
-                        assert(m_fileDependencies.find(fileHandle) !=
-                               m_fileDependencies.end());
-                        m_fileDependencies[fileHandle].push_back(handle);
                         m_artboardDependencies[handle] = {};
                         m_artboards[handle] = std::move(artboard);
                     }
@@ -984,8 +989,7 @@ bool CommandServer::processCommands()
                         {
                             if (viewModelInstanceName.empty())
                             {
-                                instance =
-                                    ref_rcp(viewModel->createDefaultInstance());
+                                instance = viewModel->createDefaultInstance();
                                 if (instance == nullptr)
                                 {
                                     ErrorReporter<FileHandle>(
@@ -1000,9 +1004,8 @@ bool CommandServer::processCommands()
                             }
                             else
                             {
-                                instance =
-                                    ref_rcp(viewModel->createInstanceFromName(
-                                        viewModelInstanceName));
+                                instance = viewModel->createInstanceFromName(
+                                    viewModelInstanceName);
                                 if (instance == nullptr)
                                 {
                                     ErrorReporter<FileHandle>(
@@ -1019,7 +1022,7 @@ bool CommandServer::processCommands()
                         }
                         else
                         {
-                            instance = ref_rcp(viewModel->createInstance());
+                            instance = viewModel->createInstance();
                             if (instance == nullptr)
                             {
                                 ErrorReporter<FileHandle>(
@@ -1259,8 +1262,7 @@ bool CommandServer::processCommands()
                                 requestId,
                                 CommandQueue::Message::viewModelError)
                                 << "Property type " << data.type
-                                << " is not valid when "
-                                << "subscribing";
+                                << " is not valid when subscribing";
                         }
                     }
                     else
@@ -1313,8 +1315,7 @@ bool CommandServer::processCommands()
                     if (auto nestedViewModel =
                             rootViewInstance->propertyViewModel(path))
                     {
-                        m_viewModels[nestedViewHandle] =
-                            ref_rcp(nestedViewModel);
+                        m_viewModels[nestedViewHandle] = nestedViewModel;
                     }
                     else
                     {
@@ -1365,8 +1366,7 @@ bool CommandServer::processCommands()
                         auto viewModelInstance = list->instanceAt(index);
                         if (viewModelInstance)
                         {
-                            m_viewModels[listViewHandle] =
-                                ref_rcp(viewModelInstance);
+                            m_viewModels[listViewHandle] = viewModelInstance;
                         }
                         else
                         {
@@ -1934,6 +1934,27 @@ bool CommandServer::processCommands()
                                 m_commandQueue->m_messageNames
                                     << enumProperty->enumType();
                             }
+                            if (property.type == DataType::viewModel)
+                            {
+                                // Get the type of the view model property
+                                auto viewModelTmp =
+                                    modelInstance->propertyViewModel(
+                                        property.name);
+                                if (viewModelTmp)
+                                {
+                                    m_commandQueue->m_messageNames
+                                        << viewModelTmp->instance()
+                                               ->viewModel()
+                                               ->name();
+                                }
+                                else
+                                {
+                                    // If we can't determine the name we still
+                                    // need to send something because the
+                                    // command queue is expecting a name.
+                                    m_commandQueue->m_messageNames << "Unkown";
+                                }
+                            }
                         }
                     }
                     else
@@ -2244,14 +2265,14 @@ bool CommandServer::processCommands()
                         }
                         case DataType::artboard:
                         {
-                            if (auto artboard =
-                                    getArtboardInstance(artboadHandle))
+                            if (auto bindableArtboard =
+                                    getBindableArtboard(artboadHandle))
                             {
                                 if (auto artboardProperty =
                                         viewModelInstance->propertyArtboard(
                                             value.metaData.name))
                                 {
-                                    artboardProperty->value(artboard);
+                                    artboardProperty->value(bindableArtboard);
                                 }
                                 else
                                 {
@@ -2536,7 +2557,9 @@ bool CommandServer::processCommands()
                 {
                     Vec2D position =
                         cursorPosForPointerEvent(stateMachine, pointerEvent);
-                    stateMachine->pointerMove(position);
+                    stateMachine->pointerMove(position,
+                                              0.0f,
+                                              pointerEvent.pointerId);
                 }
                 else
                 {
@@ -2564,7 +2587,7 @@ bool CommandServer::processCommands()
                 {
                     Vec2D position =
                         cursorPosForPointerEvent(stateMachine, pointerEvent);
-                    stateMachine->pointerDown(position);
+                    stateMachine->pointerDown(position, pointerEvent.pointerId);
                 }
                 else
                 {
@@ -2592,7 +2615,7 @@ bool CommandServer::processCommands()
                 {
                     Vec2D position =
                         cursorPosForPointerEvent(stateMachine, pointerEvent);
-                    stateMachine->pointerUp(position);
+                    stateMachine->pointerUp(position, pointerEvent.pointerId);
                 }
                 else
                 {
@@ -2620,7 +2643,7 @@ bool CommandServer::processCommands()
                 {
                     Vec2D position =
                         cursorPosForPointerEvent(stateMachine, pointerEvent);
-                    stateMachine->pointerExit(position);
+                    stateMachine->pointerExit(position, pointerEvent.pointerId);
                 }
                 else
                 {

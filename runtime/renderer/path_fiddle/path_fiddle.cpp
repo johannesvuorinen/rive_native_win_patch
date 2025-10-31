@@ -3,11 +3,13 @@
 #include "rive/math/simd.hpp"
 #include "rive/artboard.hpp"
 #include "rive/file.hpp"
+#include "rive/refcnt.hpp"
 #include "rive/layout.hpp"
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/static_scene.hpp"
 #include "rive/profiler/profiler_macros.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -41,9 +43,27 @@ constexpr static char kSwiftShaderICD[] = "dependencies/SwiftShader/build/"
                                           "Linux"
 #endif
                                           "/vk_swiftshader_icd.json";
+
+#ifdef _WIN32
+extern "C"
+{
+    // https://stackoverflow.com/questions/68469954/how-to-choose-specific-gpu-when-create-opengl-context:
+    //
+    //   OpenGL, or rather the Win32 GDI integration of it, doesn't offer means
+    //   to explicitly select the desired device. However the drivers of Nvidia
+    //   and AMD offer a workaround to have programs select, that they prefer to
+    //   execute on the discrete GPU rather than the CPU integrated one.
+    //
+    // These also appear to select the discrete "Arc" GPU on an Intel system,
+    // and to influence the GPU selection on D3D11.
+    __declspec(dllexport) uint32_t NvOptimusEnablement = 1;
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 static FiddleContextOptions options;
 static GLFWwindow* window = nullptr;
-static int msaa = 0;
+static uint32_t msaa = 0;
 static bool forceAtomicMode = false;
 static bool wireframe = false;
 static bool disableFill = false;
@@ -450,7 +470,6 @@ int main(int argc, const char** argv)
         else if (!strcmp(argv[i], "--glcw"))
         {
             api = API::gl;
-            forceAtomicMode = true;
             clockwiseFill = true;
         }
         else if (!strcmp(argv[i], "--metal"))
@@ -566,23 +585,23 @@ int main(int argc, const char** argv)
         {
             skia = true;
         }
-        else if (sscanf(argv[i], "-a%i", &animation))
+        else if (sscanf(argv[i], "-a%i", &animation) == 1)
         {
             // Already updated animation.
         }
-        else if (sscanf(argv[i], "-s%i", &stateMachine))
+        else if (sscanf(argv[i], "-s%i", &stateMachine) == 1)
         {
             // Already updated stateMachine.
         }
-        else if (sscanf(argv[i], "-h%i", &horzRepeat))
+        else if (sscanf(argv[i], "-h%i", &horzRepeat) == 1)
         {
             // Already updated horzRepeat.
         }
-        else if (sscanf(argv[i], "-j%i", &downRepeat))
+        else if (sscanf(argv[i], "-j%i", &downRepeat) == 1)
         {
             // Already updated downRepeat.
         }
-        else if (sscanf(argv[i], "-k%i", &upRepeat))
+        else if (sscanf(argv[i], "-k%i", &upRepeat) == 1)
         {
             // Already updated upRepeat.
         }
@@ -598,23 +617,55 @@ int main(int argc, const char** argv)
         {
             forceAtomicMode = true;
         }
-        else if (!strncmp(argv[i], "--msaa", 6))
+        else if (!strcmp(argv[i], "--cw"))
         {
-            msaa = argv[i][6] - '0';
+            clockwiseFill = true;
+        }
+        else if (sscanf(argv[i], "--msaa%u", &msaa) == 1)
+        {
+            // Already updated msaa
+        }
+        else if (!strcmp(argv[i], "--core"))
+        {
+            options.coreFeaturesOnly = true;
         }
         else if (!strcmp(argv[i], "--validation"))
         {
             options.enableVulkanValidationLayers = true;
         }
-        else if (!strcmp(argv[i], "--gpu") || !strcmp(argv[i], "-G"))
+        else if (!strcmp(argv[i], "--gpu") || !strcmp(argv[i], "-g"))
         {
             options.gpuNameFilter = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--integrated") || !strcmp(argv[i], "-i"))
+        {
+            options.gpuNameFilter = "integrated";
+        }
+        else if (!strncmp(argv[i], "--", 2))
+        {
+            fprintf(stderr, "Unknown command-line option %s\n", argv[i]);
+            return 1;
         }
         else
         {
             rivName = argv[i];
         }
     }
+
+#ifdef _WIN32
+    // Set our backdoor GPU selection variables in case the API doesn't allow us
+    // to select explicitly.
+    if (options.gpuNameFilter != nullptr)
+    {
+        // "i" and "integrated" are special-case gpuNameFilters that mean "use
+        // the integrated GPU".
+        bool wantIntegratedGPU = static_cast<uint32_t>(
+            strcmp(options.gpuNameFilter, "integrated") == 0 ||
+            strcmp(options.gpuNameFilter, "i") == 0);
+        NvOptimusEnablement = !wantIntegratedGPU;
+        AmdPowerXpressRequestHighPerformance = !wantIntegratedGPU;
+    }
+#endif
 
     glfwSetErrorCallback(glfw_error_callback);
 
@@ -732,6 +783,12 @@ int main(int argc, const char** argv)
             glfwWaitEvents();
         }
     }
+
+    // We need to clear the riv scene (which can be holding on to render
+    // resources) before releasing the fiddle context
+    clear_scenes();
+    rivFile = nullptr;
+
     fiddleContext = nullptr;
     glfwTerminate();
 #endif
@@ -832,7 +889,23 @@ void riveMainLoop()
         hotloadShaders = false;
 
 #ifndef RIVE_BUILD_FOR_IOS
-        std::system("sh rebuild_shaders.sh /tmp/rive");
+        // We want to build to /tmp/rive (or the correct equivalent)
+        std::filesystem::path tempRiveDir =
+            std::filesystem::temp_directory_path() / "rive";
+
+        // Get the u8 version of the path (this is especially necessary on
+        // windows where the native path character type is wchar_t, then
+        // reinterpret_cast the char8_t pointer to char so we can append it to
+        // our string.
+        // Store the u8string result to extend its lifetime (need to
+        // reinterpret_cast through a const char * pointer because u8string
+        // returns a std::u8string in C++20 and newer, but we need it as a
+        // "char" string)
+        std::string tempRiveDirStr =
+            reinterpret_cast<const char*>(tempRiveDir.u8string().c_str());
+
+        std::string rebuildCommand = "sh rebuild_shaders.sh " + tempRiveDirStr;
+        std::system(rebuildCommand.c_str());
 #endif
         fiddleContext->hotloadShaders();
     }

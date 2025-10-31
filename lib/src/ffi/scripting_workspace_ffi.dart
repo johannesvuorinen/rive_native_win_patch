@@ -148,6 +148,12 @@ void Function() _freeNativeFont = _nativeLib
     .lookup<NativeFunction<Void Function()>>('freeNativeFont')
     .asFunction();
 
+final Pointer<Utf8> Function(Pointer<Void>)
+    _scriptingWorkspaceBuiltinDefinitions = nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+            'scriptingWorkspaceBuiltinDefinitions')
+        .asFunction();
+
 final class HighlightBuffer extends Struct {
   @Uint32()
   external int count;
@@ -333,6 +339,10 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   @override
   ScriptingWorkspaceResponseResult responseForWork(int workId) =>
       _scriptingWorkspaceResponse(_nativeWorkspace, workId);
+
+  @override
+  String get builtinDefinitions =>
+      _scriptingWorkspaceBuiltinDefinitions(_nativeWorkspace).toDartString();
 }
 
 ScriptingWorkspace makeScriptingWorkspace() => ScriptingWorkspaceFFI();

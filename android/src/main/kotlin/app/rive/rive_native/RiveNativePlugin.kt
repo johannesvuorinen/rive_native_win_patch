@@ -1,4 +1,5 @@
 package app.rive.rive_native
+
 import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
@@ -6,6 +7,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.view.TextureRegistry
+import android.util.Log
 
 external fun createRiveRenderer(
     surface: Surface,
@@ -36,6 +38,9 @@ class RiveNativePlugin :
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // Clean up all remaining textures
+        renderTextures.values.forEach { it.release() }
+        renderTextures.clear()
         channel.setMethodCallHandler(null)
     }
 
@@ -60,7 +65,7 @@ class RiveNativePlugin :
                 val surfaceProducer = textureRegistry.createSurfaceProducer()
                 val riveTexture = RiveRenderTexture(surfaceProducer, width, height)
                 renderTextures[surfaceProducer.id()] = riveTexture
-                
+
 
                 result.success(
                     mapOf(
@@ -69,6 +74,7 @@ class RiveNativePlugin :
                     ),
                 )
             }
+
             "getRenderContext" -> {
                 result.success(
                     mapOf(
@@ -76,8 +82,9 @@ class RiveNativePlugin :
                     ),
                 )
             }
+
             "removeTexture" -> {
-                val textureId = call.argument<Integer>("id")?.toLong()
+                val textureId = call.argument<Int>("id")?.toLong()
                 if (textureId == null) {
                     result.error(
                         "removeTexture Error",
@@ -92,6 +99,7 @@ class RiveNativePlugin :
                     renderTextures.remove(textureId)
                     result.success(null)
                 } ?: run {
+                    Log.e("RiveNativePlugin", "removeTexture: texture $textureId not found")
                     result.error(
                         "removeTexture Error",
                         "Texture not found",
@@ -99,6 +107,7 @@ class RiveNativePlugin :
                     )
                 }
             }
+
             else -> result.notImplemented()
         }
     }
@@ -109,18 +118,17 @@ class RiveRenderTexture(
     width: Int,
     height: Int,
 ) : TextureRegistry.SurfaceProducer.Callback {
-    private val producer: TextureRegistry.SurfaceProducer
+    private val producer: TextureRegistry.SurfaceProducer = surfaceProducer
     private var surface: Surface
-    public var riveRenderer: Long = 0
+    var riveRenderer: Long = 0
 
     init {
-        producer = surfaceProducer
         producer.setSize(width, height)
         producer.setCallback(
             this,
         )
 
-        surface = producer.getSurface()
+        surface = producer.surface
         riveRenderer =
             createRiveRenderer(
                 surface,
@@ -130,31 +138,40 @@ class RiveRenderTexture(
     }
 
     // Called when coming back from backgrounding.
-    override fun onSurfaceCreated() {
+    override fun onSurfaceAvailable() {
         // This should only happen when returning from backgrounding.
         markRendererDestroyed()
         // Make a new surface for Flutter to use, but we're going to build a new
         // texture shortly...
         surface = producer.getSurface()
-
     }
 
-    override fun onSurfaceDestroyed() {
+    override fun onSurfaceCleanup() {
         // Do surface cleanup here, and stop drawing frames.
         markRendererDestroyed()
     }
 
-    fun markRendererDestroyed() {
-        if (riveRenderer != 0L) {
-            markDestroyedRiveRenderer(riveRenderer)
+    private fun markRendererDestroyed() {
+        synchronized(this) {
+            if (riveRenderer != 0L) {
+                markDestroyedRiveRenderer(riveRenderer)
+            }
         }
     }
 
     fun release() {
-        if (riveRenderer != 0L) {
-            destroyRiveRenderer(riveRenderer)
-            riveRenderer = 0
+        synchronized(this) {
+            if (riveRenderer != 0L) {
+                destroyRiveRenderer(riveRenderer)
+                riveRenderer = 0
+            }
+            try {
+                surface.release()
+                producer.release()
+            } catch (e: Exception) {
+                Log.w("RiveNativePlugin", "release: error releasing surface: $e")
+                // Surface may already be released, ignore
+            }
         }
-        surface.release()
     }
 }

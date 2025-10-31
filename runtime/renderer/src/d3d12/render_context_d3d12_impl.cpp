@@ -7,14 +7,9 @@
 // needed for root sig and heap constants
 #include "shaders/d3d/root.sig"
 
-#ifdef RIVE_DECODERS
-#include "rive/decoders/bitmap_decoder.hpp"
-#endif
-
 #include <sstream>
 #include <D3DCompiler.h>
 
-#include <fstream>
 // this is defined here instead of root_sig becaise the gpu does not care about
 // the number of rtvs this is gradient, tess, atlas and color
 static constexpr UINT NUM_RTV_HEAP_DESCRIPTORS = 4;
@@ -25,10 +20,10 @@ static constexpr D3D12_FILTER filter_for_sampler_options(ImageFilter option)
 {
     switch (option)
     {
-        case ImageFilter::trilinear:
-            return D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
         case ImageFilter::nearest:
             return D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
+        case ImageFilter::bilinear:
+            return D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
     }
 
     RIVE_UNREACHABLE();
@@ -548,9 +543,9 @@ RenderContextD3D12Impl::RenderContextD3D12Impl(
 
     m_platformFeatures.clipSpaceBottomUp = true;
     m_platformFeatures.framebufferBottomUp = false;
-    m_platformFeatures.supportsRasterOrdering =
+    m_platformFeatures.supportsRasterOrderingMode =
         m_capabilities.supportsRasterizerOrderedViews;
-    m_platformFeatures.supportsFragmentShaderAtomics = true;
+    m_platformFeatures.supportsAtomicMode = true;
     m_platformFeatures.maxTextureSize = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 
     m_rtvHeap = m_resourceManager->makeHeap(NUM_RTV_HEAP_DESCRIPTORS,
@@ -1257,7 +1252,7 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
 
     // Setup and clear the PLS textures.
 
-    if (desc.atomicFixedFunctionColorOutput)
+    if (desc.fixedFunctionColorOutput)
     {
         m_resourceManager->transition(cmdList,
                                       targetTexture,
@@ -1273,7 +1268,7 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
             cmdList->ClearRenderTargetView(rtvHandle, clearColor4f, 0, nullptr);
         }
     }
-    else // !desc.atomicFixedFunctionColorOutput
+    else // !desc.fixedFunctionColorOutput
     {
         if (renderTarget->targetTextureSupportsUAV())
         {
@@ -1343,7 +1338,7 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
 
     bool renderPassHasCoalescedResolveAndTransfer =
         desc.interlockMode == gpu::InterlockMode::atomics &&
-        !desc.atomicFixedFunctionColorOutput &&
+        !desc.fixedFunctionColorOutput &&
         !renderTarget->targetTextureSupportsUAV();
 
     if (desc.combinedShaderFeatures & gpu::ShaderFeatures::ENABLE_CLIPPING)
@@ -1399,13 +1394,14 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
                                   ? desc.combinedShaderFeatures
                                   : batch.shaderFeatures;
         auto shaderMiscFlags = batch.shaderMiscFlags;
-        if (drawType == gpu::DrawType::atomicResolve &&
+        if (drawType == gpu::DrawType::renderPassResolve &&
             renderPassHasCoalescedResolveAndTransfer)
         {
+            assert(desc.interlockMode == gpu::InterlockMode::atomics);
             shaderMiscFlags |=
                 gpu::ShaderMiscFlags::coalescedResolveAndTransfer;
         }
-        if (desc.atomicFixedFunctionColorOutput)
+        if (desc.fixedFunctionColorOutput)
         {
             shaderMiscFlags |= gpu::ShaderMiscFlags::fixedFunctionColorOutput;
         }
@@ -1426,15 +1422,6 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
 #endif
             },
             m_platformFeatures);
-
-        if (pipeline == nullptr)
-        {
-            // There was an issue getting either the requested pipeline state or
-            // its ubershader counterpart so we cannot draw anything.
-            continue;
-        }
-
-        cmdList->SetPipelineState(pipeline->m_d3dPipelineState.Get());
 
         // all atomic barriers are the same for dx12
         if (batch.barriers &
@@ -1459,6 +1446,15 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
                     : 2,
                 barriers);
         }
+
+        if (pipeline == nullptr)
+        {
+            // There was an issue getting either the requested pipeline state or
+            // its ubershader counterpart so we cannot draw anything.
+            continue;
+        }
+
+        cmdList->SetPipelineState(pipeline->m_d3dPipelineState.Get());
 
         if (auto imageTextureD3D12 =
                 static_cast<const TextureD3D12Impl*>(batch.imageTexture))
@@ -1618,13 +1614,12 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
                                               0);
                 break;
             }
-            case DrawType::atomicResolve:
+            case DrawType::renderPassResolve:
                 assert(desc.interlockMode == gpu::InterlockMode::atomics);
                 cmdList->IASetPrimitiveTopology(
                     D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
                 cmdList->DrawInstanced(4, 1, 0, 0);
                 break;
-            case DrawType::atomicInitialize:
             case DrawType::msaaStrokes:
             case DrawType::msaaMidpointFanBorrowedCoverage:
             case DrawType::msaaMidpointFans:
@@ -1633,6 +1628,7 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
             case DrawType::msaaMidpointFanPathsCover:
             case DrawType::msaaOuterCubics:
             case DrawType::msaaStencilClipReset:
+            case DrawType::renderPassInitialize:
                 RIVE_UNREACHABLE();
         }
     }
@@ -1642,7 +1638,7 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
     {
         // We rendered to an offscreen UAV and did not resolve to the
         // renderTarget. Copy back to the main target.
-        assert(!desc.atomicFixedFunctionColorOutput);
+        assert(!desc.fixedFunctionColorOutput);
         assert(!renderPassHasCoalescedResolveAndTransfer);
         blitSubRect(cmdList,
                     renderTarget->targetTexture(),
@@ -1660,10 +1656,10 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
-    if (desc.atomicFixedFunctionColorOutput ||
+    if (desc.fixedFunctionColorOutput ||
         renderPassHasCoalescedResolveAndTransfer ||
         (renderTarget->targetTextureSupportsUAV() &&
-         !desc.atomicFixedFunctionColorOutput))
+         !desc.fixedFunctionColorOutput))
     {
         m_resourceManager->transition(cmdList,
                                       targetTexture,

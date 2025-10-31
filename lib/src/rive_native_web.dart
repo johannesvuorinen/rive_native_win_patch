@@ -8,7 +8,6 @@ import 'dart:ui' as ui;
 import 'dart:ui_web' as ui_web;
 import 'package:web/web.dart' as web;
 
-import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:rive_native/rive_native.dart';
 import 'package:rive_native/src/wasm_version.dart';
@@ -47,6 +46,9 @@ extension RiveNativeJsExtension on js.JSFunction {
 }
 
 base class _WebRenderTexture extends RenderTexture {
+  @override
+  int get textureId => -1;
+
   // late int _webRenderer;
   static int _canvasCounter = 0;
   js.JSObject? jsRenderContext;
@@ -157,6 +159,19 @@ base class _WebRenderTexture extends RenderTexture {
   // TODO (Gordon): might want to revisit this if we ever destroy renderers and not just return them to the pool.
   @override
   bool get isDisposed => false;
+
+  @override
+  int get actualWidth => canvasElement.width;
+  @override
+  int get actualHeight => canvasElement.height;
+
+  @override
+  Future<void> makeRenderTexture(int width, int height) {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool needsResize(int width, int height) => false;
 }
 
 class WasmBuffer {
@@ -244,6 +259,7 @@ class RiveWasm {
   static late js.JSFunction setArtboardIsAncestorCallback;
   static late js.JSFunction setArtboardRootTransformCallback;
   static late js.JSFunction setArtboardLayoutDirtyCallback;
+  static late js.JSFunction setArtboardTransformDirtyCallback;
   static late js.JSFunction setStateMachineInputChangedCallback;
   static late js.JSFunction setArtboardEventCallback;
   static late js.JSFunction addRawPath;
@@ -962,6 +978,8 @@ class RiveWasm {
         module['setArtboardRootTransformCallback'] as js.JSFunction;
     setArtboardLayoutDirtyCallback =
         module['setArtboardLayoutDirtyCallback'] as js.JSFunction;
+    setArtboardTransformDirtyCallback =
+        module['setArtboardTransformDirtyCallback'] as js.JSFunction;
     deleteInput = module['_deleteInput'] as js.JSFunction;
     deleteComponent = module['_deleteComponent'] as js.JSFunction;
     deleteStateMachineInstance =
@@ -1380,92 +1398,25 @@ class _RiveNativeWebView extends LeafRenderObjectWidget {
   }
 }
 
-class _RiveNativeWebViewRenderObject
-    extends RiveNativeRenderBox<RenderTexturePainter> {
-  _WebRenderTexture _renderTexture;
-
+class _RiveNativeWebViewRenderObject extends RiveNativeRenderBox {
   _RiveNativeWebViewRenderObject(
-    this._renderTexture,
+    super._renderTexture,
     RenderTexturePainter? renderTexturePainter,
   ) {
     painter = renderTexturePainter;
   }
 
   @override
-  set painter(RenderTexturePainter? value) {
-    super.painter = value;
-    _paintTexture();
-  }
-
-  @override
-  bool get shouldAdvance => _shouldAdvance;
-  bool _shouldAdvance = false;
-
-  @override
-  void attach(PipelineOwner owner) {
-    super.attach(owner);
-    markNeedsLayout();
-  }
-
-  @override
-  void frameCallback(Duration duration) {
-    super.frameCallback(duration);
-    _paintTexture();
-  }
-
-  void _paintTexture() {
-    final painter = rivePainter;
-    if (painter == null || !renderTexture.isReady || !hasSize) {
-      return;
-    }
-    // Question (Gordon): Why is this not using the devicePixelRatio from the
-    // render object?
-    final devicePixelRatio = html.window.devicePixelRatio;
-    final width = (size.width * devicePixelRatio).roundToDouble();
-    final height = (size.height * devicePixelRatio).roundToDouble();
-    if (!_renderTexture.clear(painter.background, painter.clear)) {
-      markNeedsPaint();
-      return;
-    }
-    final shouldAdvance = painter.paint(
-      _renderTexture,
-      devicePixelRatio.toDouble(),
-      Size(width, height),
-      elapsedSeconds,
-    );
-    if (shouldAdvance && shouldAdvance != _shouldAdvance) {
-      restartTickerIfStopped();
-    }
-    _shouldAdvance = shouldAdvance;
-    if (!_renderTexture.flush(devicePixelRatio)) {
-      markNeedsPaint();
-      return;
-    }
-    if (painter.paintsCanvas) {
-      markNeedsPaint();
-    }
-  }
-
-  _WebRenderTexture get renderTexture => _renderTexture;
-  set renderTexture(_WebRenderTexture value) {
-    if (_renderTexture == value) {
-      return;
-    }
-    _renderTexture = value;
-    markNeedsPaint();
-  }
-
-  @override
-  void performLayout() {
-    super.performLayout();
-    _paintTexture();
-  }
+  double get devicePixelRatio => html.window.devicePixelRatio;
 
   @override
   Size computeDryLayout(BoxConstraints constraints) => constraints.smallest;
 
   @override
   void paint(PaintingContext context, Offset offset) {
+    // TODO (Gordon): Should call super.paint(context, offset);
+    // But first need to properly resize the HTML canvas element to account for the transform.
+    // super.paint(context, offset);
     var painter = rivePainter;
     if (painter != null && painter.paintsCanvas) {
       painter.paintCanvas(context.canvas, offset, size);

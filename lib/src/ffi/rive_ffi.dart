@@ -1,6 +1,7 @@
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io' as io;
 import 'dart:typed_data';
 import 'dart:ui' show Color;
 
@@ -20,7 +21,6 @@ import 'package:rive_native/src/ffi/rive_renderer_ffi.dart';
 import 'package:rive_native/src/ffi/rive_text_ffi.dart';
 import 'package:rive_native/src/rive.dart';
 import 'package:rive_native/src/rive_renderer.dart';
-import 'dart:io' as io;
 
 final DynamicLibrary nativeLib = DynamicLibraryHelper.open();
 
@@ -584,36 +584,51 @@ final bool Function(Pointer<Void> ami, double x, double y)
         .lookup<NativeFunction<Bool Function(Pointer<Void>, Float, Float)>>(
             'stateMachineInstanceHitTest')
         .asFunction();
-final int Function(Pointer<Void> ami, double x, double y)
-    _stateMachineInstancePointerDown = nativeLib
-        .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float)>>(
-            'stateMachineInstancePointerDown')
-        .asFunction();
-final int Function(Pointer<Void> ami, double x, double y)
-    _stateMachineInstancePointerUp = nativeLib
-        .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float)>>(
-            'stateMachineInstancePointerUp')
-        .asFunction();
 final int Function(
-    Pointer<Void> ami,
-    double x,
-    double y,
-    double
-        timeStamp) _stateMachineInstancePointerMove = nativeLib
-    .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Float)>>(
-        'stateMachineInstancePointerMove')
+  Pointer<Void> ami,
+  double x,
+  double y,
+  int pointerId,
+) _stateMachineInstancePointerDown = nativeLib
+    .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Int)>>(
+        'stateMachineInstancePointerDown')
     .asFunction();
-final int Function(Pointer<Void> ami, double x, double y)
-    _stateMachineInstancePointerExit = nativeLib
-        .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float)>>(
-            'stateMachineInstancePointerExit')
-        .asFunction();
 final int Function(
-    Pointer<Void> ami,
-    double x,
-    double y,
-    double
-        timeStamp) _stateMachineInstanceDragStart = nativeLib
+  Pointer<Void> ami,
+  double x,
+  double y,
+  int pointerId,
+) _stateMachineInstancePointerUp = nativeLib
+    .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Int)>>(
+        'stateMachineInstancePointerUp')
+    .asFunction();
+final int Function(
+  Pointer<Void> ami,
+  double x,
+  double y,
+  double timeStamp,
+  int pointerId,
+) _stateMachineInstancePointerMove = nativeLib
+    .lookup<
+        NativeFunction<
+            Uint8 Function(Pointer<Void>, Float, Float, Float,
+                Int)>>('stateMachineInstancePointerMove')
+    .asFunction();
+final int Function(
+  Pointer<Void> ami,
+  double x,
+  double y,
+  int pointerId,
+) _stateMachineInstancePointerExit = nativeLib
+    .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Int)>>(
+        'stateMachineInstancePointerExit')
+    .asFunction();
+final int Function(
+  Pointer<Void> ami,
+  double x,
+  double y,
+  double timeStamp,
+) _stateMachineInstanceDragStart = nativeLib
     .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Float)>>(
         'stateMachineInstanceDragStart')
     .asFunction();
@@ -949,6 +964,14 @@ void Function(Pointer<Void>, Pointer<NativeFunction<Void Function()>>)
                     Void Function(Pointer<Void>,
                         Pointer<NativeFunction<Void Function()>>)>>(
             'setArtboardLayoutDirtyCallback')
+        .asFunction();
+void Function(Pointer<Void>, Pointer<NativeFunction<Void Function()>>)
+    _setArtboardTransformDirtyCallback = nativeLib
+        .lookup<
+                NativeFunction<
+                    Void Function(Pointer<Void>,
+                        Pointer<NativeFunction<Void Function()>>)>>(
+            'setArtboardTransformDirtyCallback')
         .asFunction();
 
 final Pointer<Void> Function(Pointer<Void>, int index)
@@ -1871,7 +1894,7 @@ class FFIRiveViewModelRuntime
 }
 
 class FFIRiveViewModelInstanceRuntime
-    with ViewModelInstanceCallbackMixin
+    with ViewModelInstanceCallbackMixin, AdvanceRequestMixin
     implements ViewModelInstance, RiveFFIReference, Finalizable {
   @override
   Pointer<Void> get pointer => _pointer;
@@ -1997,6 +2020,7 @@ class FFIRiveViewModelInstanceRuntime
   @override
   void dispose() {
     clearCallbacks();
+    removeAllAdvanceRequestListeners();
 
     if (_pointer == nullptr) {
       return;
@@ -2016,7 +2040,7 @@ abstract class FFIViewModelInstanceValueRuntime
   static final _finalizer =
       NativeFinalizer(_NativeVMIValueRuntime.deleteNative);
 
-  final ViewModelInstance _rootViewModelInstance;
+  final FFIRiveViewModelInstanceRuntime _rootViewModelInstance;
   @override
   ViewModelInstance get rootViewModelInstance => _rootViewModelInstance;
 
@@ -2163,6 +2187,7 @@ class FFIViewModelInstanceTriggerRuntime
 
   @override
   void trigger() {
+    _rootViewModelInstance.requestAdvance();
     _NativeVMITriggerRuntime.trigger(pointer);
   }
 
@@ -2189,6 +2214,7 @@ class FFIViewModelInstanceAssetImageRuntime
 
   @override
   set value(covariant FFIRenderImage? value) {
+    _rootViewModelInstance.requestAdvance();
     _NativeVMIAssetImageRuntime.setValue(pointer, value?.pointer ?? nullptr);
   }
 }
@@ -2203,10 +2229,13 @@ class FFIViewModelInstanceListRuntime extends FFIViewModelInstanceValueRuntime
   int get length => _NativeVMIListRuntime.size(pointer);
 
   @override
-  void add(ViewModelInstance instance) => _NativeVMIListRuntime.addInstance(
-        pointer,
-        (instance as FFIRiveViewModelInstanceRuntime).pointer,
-      );
+  void add(covariant FFIRiveViewModelInstanceRuntime instance) {
+    _rootViewModelInstance.requestAdvance();
+    _NativeVMIListRuntime.addInstance(
+      pointer,
+      instance.pointer,
+    );
+  }
 
   @override
   bool insert(
@@ -2217,16 +2246,19 @@ class FFIViewModelInstanceListRuntime extends FFIViewModelInstanceValueRuntime
     if (index >= length) {
       throw RangeError.range(index, 0, length - 1, "index");
     }
+    _rootViewModelInstance.requestAdvance();
     return _NativeVMIListRuntime.addInstanceAt(
         pointer, instance.pointer, index);
   }
 
   @override
-  void remove(covariant FFIRiveViewModelInstanceRuntime instance) =>
-      _NativeVMIListRuntime.removeInstance(
-        pointer,
-        instance.pointer,
-      );
+  void remove(covariant FFIRiveViewModelInstanceRuntime instance) {
+    _rootViewModelInstance.requestAdvance();
+    _NativeVMIListRuntime.removeInstance(
+      pointer,
+      instance.pointer,
+    );
+  }
 
   @override
   void removeAt(int index) {
@@ -2234,6 +2266,7 @@ class FFIViewModelInstanceListRuntime extends FFIViewModelInstanceValueRuntime
     if (index >= length) {
       throw RangeError.range(index, 0, length - 1, "index");
     }
+    _rootViewModelInstance.requestAdvance();
     _NativeVMIListRuntime.removeInstanceAt(pointer, index);
   }
 
@@ -2248,8 +2281,7 @@ class FFIViewModelInstanceListRuntime extends FFIViewModelInstanceValueRuntime
       throw RiveError.nullNativePointer();
     }
     return FFIRiveViewModelInstanceRuntime(ptr,
-        rootViewModelInstance:
-            _rootViewModelInstance as FFIRiveViewModelInstanceRuntime);
+        rootViewModelInstance: _rootViewModelInstance);
   }
 
   @override
@@ -2263,6 +2295,7 @@ class FFIViewModelInstanceListRuntime extends FFIViewModelInstanceValueRuntime
     if (b >= length) {
       throw RangeError.range(b, 0, length - 1, "b");
     }
+    _rootViewModelInstance.requestAdvance();
     _NativeVMIListRuntime.swap(pointer, a, b);
   }
 
@@ -2299,18 +2332,17 @@ class FFIViewModelInstanceArtboardRuntime
 
   @override
   set value(covariant FFIBindableArtboard value) {
+    _rootViewModelInstance.requestAdvance();
     _NativeVMIArtboardRuntime.setValue(pointer, value.pointer);
   }
 }
 
 class FFIStateMachine extends StateMachine
-    with EventListenerMixin
+    with EventListenerMixin, AdvanceRequestMixin
     implements RiveFFIReference, Finalizable {
   @override
   Pointer<Void> get pointer => _pointer;
   Pointer<Void> _pointer;
-  ViewModelInstance? _boundRuntimeViewModelInstance;
-
   static final _finalizer = NativeFinalizer(_deleteStateMachineInstanceNative);
 
   FFIStateMachine(this._pointer) {
@@ -2330,12 +2362,13 @@ class FFIStateMachine extends StateMachine
     _handleEvents();
     final result =
         _stateMachineInstanceAdvanceAndApply(pointer, elapsedSeconds);
-    _boundRuntimeViewModelInstance?.handleCallbacks();
+    boundRuntimeViewModelInstance?.handleCallbacks();
     return result;
   }
 
   @override
   void dispose() {
+    super.dispose();
     removeAllEventListeners();
     if (_pointer == nullptr) {
       return;
@@ -2396,19 +2429,19 @@ class FFIStateMachine extends StateMachine
   @override
   BooleanInput? boolean(String name, {String? path}) {
     final ptr = _inputWrapper(_stateMachineInstanceBoolean, name, path: path);
-    return ptr == nullptr ? null : FFIBooleanInput(ptr);
+    return ptr == nullptr ? null : FFIBooleanInput(ptr, this);
   }
 
   @override
   NumberInput? number(String name, {String? path}) {
     final ptr = _inputWrapper(_stateMachineInstanceNumber, name, path: path);
-    return ptr == nullptr ? null : FFINumberInput(ptr);
+    return ptr == nullptr ? null : FFINumberInput(ptr, this);
   }
 
   @override
   TriggerInput? trigger(String name, {String? path}) {
     final ptr = _inputWrapper(_stateMachineInstanceTrigger, name, path: path);
-    return ptr == nullptr ? null : FFITriggerInput(ptr);
+    return ptr == nullptr ? null : FFITriggerInput(ptr, this);
   }
 
   @override
@@ -2419,11 +2452,11 @@ class FFIStateMachine extends StateMachine
     }
     switch (_stateMachineInputType(inputPointer)) {
       case 56:
-        return FFINumberInput(inputPointer);
+        return FFINumberInput(inputPointer, this);
       case 58:
-        return FFITriggerInput(inputPointer);
+        return FFITriggerInput(inputPointer, this);
       case 59:
-        return FFIBooleanInput(inputPointer);
+        return FFIBooleanInput(inputPointer, this);
       default:
         return null;
     }
@@ -2437,30 +2470,31 @@ class FFIStateMachine extends StateMachine
       _stateMachineInstanceHitTest(pointer, position.x, position.y);
 
   @override
-  HitResult pointerDown(Vec2D position) {
-    var result =
-        _stateMachineInstancePointerDown(pointer, position.x, position.y);
+  HitResult pointerDown(Vec2D position, {int pointerId = 0}) {
+    var result = _stateMachineInstancePointerDown(
+        pointer, position.x, position.y, pointerId);
     return HitResult.values[result];
   }
 
   @override
-  HitResult pointerExit(Vec2D position) {
-    var result =
-        _stateMachineInstancePointerExit(pointer, position.x, position.y);
+  HitResult pointerExit(Vec2D position, {int pointerId = 0}) {
+    var result = _stateMachineInstancePointerExit(
+        pointer, position.x, position.y, pointerId);
     return HitResult.values[result];
   }
 
   @override
-  HitResult pointerMove(Vec2D position, {double? timeStamp}) {
+  HitResult pointerMove(Vec2D position,
+      {double? timeStamp, int pointerId = 0}) {
     var result = _stateMachineInstancePointerMove(
-        pointer, position.x, position.y, timeStamp ?? 0);
+        pointer, position.x, position.y, timeStamp ?? 0, pointerId);
     return HitResult.values[result];
   }
 
   @override
-  HitResult pointerUp(Vec2D position) {
-    var result =
-        _stateMachineInstancePointerUp(pointer, position.x, position.y);
+  HitResult pointerUp(Vec2D position, {int pointerId = 0}) {
+    var result = _stateMachineInstancePointerUp(
+        pointer, position.x, position.y, pointerId);
     return HitResult.values[result];
   }
 
@@ -2487,7 +2521,7 @@ class FFIStateMachine extends StateMachine
   @override
   void bindViewModelInstance(
       covariant FFIRiveViewModelInstanceRuntime viewModelInstance) {
-    _boundRuntimeViewModelInstance = viewModelInstance;
+    super.bindViewModelInstance(viewModelInstance);
     _NativeStateMachine.setVMIRuntime(pointer, viewModelInstance.pointer);
   }
 
@@ -2682,10 +2716,12 @@ class FFICustomStringProperty extends FFICustomProperty<String>
 abstract class FFIInput extends Input implements RiveFFIReference, Finalizable {
   static final _finalizer = NativeFinalizer(_deleteInputNative);
 
+  final FFIStateMachine _stateMachine;
+
   @override
   Pointer<Void> pointer;
 
-  FFIInput(this.pointer) {
+  FFIInput(this.pointer, this._stateMachine) {
     _finalizer.attach(this, pointer.cast(), detach: this);
   }
 
@@ -2701,33 +2737,45 @@ abstract class FFIInput extends Input implements RiveFFIReference, Finalizable {
     pointer = nullptr;
     _finalizer.detach(this);
   }
+
+  @override
+  StateMachine get internalStateMachine => _stateMachine;
 }
 
 class FFIBooleanInput extends FFIInput implements BooleanInput {
-  FFIBooleanInput(super.pointer);
+  FFIBooleanInput(super.pointer, super._stateMachine);
 
   @override
   bool get value => _getBooleanValue(pointer);
 
   @override
-  set value(bool value) => _setBooleanValue(pointer, value);
+  set value(bool value) {
+    _setBooleanValue(pointer, value);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class FFINumberInput extends FFIInput implements NumberInput {
-  FFINumberInput(super.pointer);
+  FFINumberInput(super.pointer, super._stateMachine);
 
   @override
   double get value => _getNumberValue(pointer);
 
   @override
-  set value(double value) => _setNumberValue(pointer, value);
+  set value(double value) {
+    _setNumberValue(pointer, value);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class FFITriggerInput extends FFIInput implements TriggerInput {
-  FFITriggerInput(super.pointer);
+  FFITriggerInput(super.pointer, super._stateMachine);
 
   @override
-  void fire() => _fireTrigger(pointer);
+  void fire() {
+    _fireTrigger(pointer);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class FFIRiveArtboard extends Artboard
@@ -3047,6 +3095,20 @@ class FFIRiveArtboard extends Artboard
     _setArtboardLayoutDirtyCallback(pointer, nativeCallback.nativeFunction);
     return ClosureCallbackHandler(() {
       _setArtboardLayoutDirtyCallback(
+        pointer,
+        nullptr,
+      );
+      nativeCallback.close();
+    });
+  }
+
+  @override
+  CallbackHandler onTransformDirty(void Function() callback) {
+    final nativeCallback =
+        NativeCallable<Void Function()>.isolateLocal(callback);
+    _setArtboardTransformDirtyCallback(pointer, nativeCallback.nativeFunction);
+    return ClosureCallbackHandler(() {
+      _setArtboardTransformDirtyCallback(
         pointer,
         nullptr,
       );

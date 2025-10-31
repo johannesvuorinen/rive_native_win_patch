@@ -159,15 +159,15 @@ public:
         // Choose a config, either a match if possible or the first config
         // otherwise
         const auto configMatches = [&](EGLConfig config) {
-            if (!config_has_attribute(m_display, m_config, EGL_RED_SIZE, 8))
+            if (!config_has_attribute(m_display, config, EGL_RED_SIZE, 8))
                 return false;
-            if (!config_has_attribute(m_display, m_config, EGL_GREEN_SIZE, 8))
+            if (!config_has_attribute(m_display, config, EGL_GREEN_SIZE, 8))
                 return false;
-            if (!config_has_attribute(m_display, m_config, EGL_BLUE_SIZE, 8))
+            if (!config_has_attribute(m_display, config, EGL_BLUE_SIZE, 8))
                 return false;
-            if (!config_has_attribute(m_display, m_config, EGL_STENCIL_SIZE, 8))
+            if (!config_has_attribute(m_display, config, EGL_STENCIL_SIZE, 8))
                 return false;
-            return config_has_attribute(m_display, m_config, EGL_DEPTH_SIZE, 0);
+            return config_has_attribute(m_display, config, EGL_DEPTH_SIZE, 0);
         };
 
         const auto configIter = std::find_if(supportedConfigs.cbegin(),
@@ -280,10 +280,15 @@ public:
             LOGE("Cannot make EGL_NO_SURFACE current");
             return;
         }
-        eglMakeCurrent(m_display, eglSurface, eglSurface, m_context);
+
+        if (!eglMakeCurrent(m_display, eglSurface, eglSurface, m_context))
+        {
+            LOGE("eglMakeCurrent failed");
+            EGL_ERR_CHECK();
+            return;
+        }
 
         m_currentSurface = eglSurface;
-        EGL_ERR_CHECK();
     }
 
     void swapBuffers()
@@ -319,57 +324,67 @@ public:
         m_surfaceWindow(surfaceWindow), m_width(width), m_height(height)
     {
         ANativeWindow_acquire(surfaceWindow);
-        // Do we need to aquire the surfaceWindow?
-        // ANativeWindow_acquire(surfaceWindow);
+    }
 
-        // Do we need to release this?
-        // ANativeWindow_release(surfaceWindow);
+    ~AndroidRenderTexture()
+    {
+        // Clean up GPU resources first, in reverse order of creation
+        if (threadState && m_eglSurface != EGL_NO_SURFACE)
+        {
+            // threadState->makeCurrent(m_eglSurface);
+            threadState->destroySurface(m_eglSurface);
+            m_eglSurface = EGL_NO_SURFACE;
+        }
 
-        // Store the surface window.
-        // On first clear init thread state (once per app).
+        if (m_surfaceWindow)
+        {
+            ANativeWindow_release(m_surfaceWindow);
+            m_surfaceWindow = nullptr;
+        }
 
-        // create egle surface with display, context, config stored on
-        // threadstate, something like
-        // EGLThreadState::createEGLSurface(ANativeWindow* window)
-
-        // https://github.com/rive-app/rive/blob/bbe9593c3ecc162d8e05e2a2dccb08cfedece86e/packages/runtime_android/kotlin/src/main/cpp/src/helpers/thread_state_egl.cpp#L122
-
-        ///   EGLSurface eglSurface = eglCreateWindowSurface(m_display,
-        ///   m_config, window, nullptr);
-
-        // finally we can create the render target and renderer!!
-        // https://github.com/rive-app/rive/blob/bbe9593c3ecc162d8e05e2a2dccb08cfedece86e/packages/runtime_android/kotlin/src/main/cpp/src/models/worker_impl.cpp#L129-L146
-
-        // need swap buffers? eglSwapBuffers(m_display, m_currentSurface);
-
-        // before flush: eglMakeCurrent(m_display, eglSurface, eglSurface,
-        // m_context);
+        // TODO: Rive Android calls `releaseResources` when there are no Rive
+        // views if (threadState && threadState->renderContext())
+        // {
+        //     threadState->renderContext()->releaseResources();
+        // }
     }
 
     bool beginFrame(bool clear, uint32_t color)
     {
         if (m_scheduledDestruction)
         {
+            LOGW("Rive AndroidRenderTexture beginFrame called on destroyed "
+                 "texture");
             return false;
         }
         if (!threadState)
         {
+            LOGD("Rive AndroidRenderTexture creating EGLThreadState");
             threadState = std::make_unique<EGLThreadState>();
         }
 
         if (!m_renderTarget)
         {
             m_eglSurface = threadState->createEGLSurface(m_surfaceWindow);
+            if (m_eglSurface == EGL_NO_SURFACE)
+            {
+                LOGE("AndroidRenderTexture failed to create EGL surface");
+                return false;
+            }
+
             threadState->makeCurrent(m_eglSurface);
             auto renderContext = threadState->renderContext();
             if (renderContext == nullptr)
             {
+                LOGW("Rive AndroidRenderTexture Rive Renderer (PLS) not "
+                     "supported");
                 return true; // PLS was not supported.
             }
             int width = ANativeWindow_getWidth(m_surfaceWindow);
             int height = ANativeWindow_getHeight(m_surfaceWindow);
             assert(width == m_width);
             assert(height == m_height);
+
             GLint sampleCount;
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glGetIntegerv(GL_SAMPLES, &sampleCount);
@@ -396,9 +411,25 @@ public:
     {
         if (m_scheduledDestruction)
         {
+            LOGW("Rive AndroidRenderTexture endFrame called on destroyed "
+                 "texture");
             return false;
         }
+
+        if (!threadState || !m_renderTarget || m_eglSurface == EGL_NO_SURFACE)
+        {
+            LOGE("Rive AndroidRenderTexture endFrame called with invalid "
+                 "state");
+            return false;
+        }
+
         auto renderContext = threadState->renderContext();
+        if (!renderContext)
+        {
+            LOGE("Rive AndroidRenderTexture renderContext is null");
+            return false;
+        }
+
         auto plsGL =
             renderContext->static_impl_cast<rive::gpu::RenderContextGLImpl>();
         plsGL->invalidateGLState();
@@ -472,6 +503,10 @@ EXPORT void Java_app_rive_rive_1native_RiveNativePluginKt_destroyRiveRenderer(
             reinterpret_cast<AndroidRenderTexture*>(renderer);
         delete renderTexture;
     }
+    else
+    {
+        LOGW("JNI: Rive destroyRiveRenderer called with null pointer");
+    }
 }
 
 EXPORT void
@@ -486,6 +521,10 @@ Java_app_rive_rive_1native_RiveNativePluginKt_markDestroyedRiveRenderer(
         AndroidRenderTexture* renderTexture =
             reinterpret_cast<AndroidRenderTexture*>(renderer);
         renderTexture->scheduleDestruction();
+    }
+    else
+    {
+        LOGW("JNI: Rive markDestroyedRiveRenderer called with null pointer");
     }
 }
 

@@ -1,4 +1,5 @@
 #include "rive/file.hpp"
+#include "rive/bindable_artboard.hpp"
 #include "rive/runtime_header.hpp"
 #include "rive/animation/animation.hpp"
 #include "rive/artboard_component_list.hpp"
@@ -38,6 +39,7 @@
 #include "rive/animation/blend_state_direct.hpp"
 #include "rive/animation/transition_property_viewmodel_comparator.hpp"
 #include "rive/constraints/scrolling/scroll_physics.hpp"
+#include "rive/data_bind/data_bind.hpp"
 #include "rive/data_bind/bindable_property.hpp"
 #include "rive/data_bind/bindable_property_artboard.hpp"
 #include "rive/data_bind/bindable_property_asset.hpp"
@@ -53,6 +55,7 @@
 #include "rive/data_bind/converters/data_converter_number_to_list.hpp"
 #include "rive/assets/file_asset.hpp"
 #include "rive/assets/audio_asset.hpp"
+#include "rive/assets/script_asset.hpp"
 #include "rive/assets/file_asset_contents.hpp"
 #include "rive/viewmodel/viewmodel.hpp"
 #include "rive/viewmodel/data_enum.hpp"
@@ -297,6 +300,7 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
                 case ImageAsset::typeKey:
                 case FontAsset::typeKey:
                 case AudioAsset::typeKey:
+                case ScriptAsset::typeKey:
                 {
                     auto fa = object->as<FileAsset>();
                     m_fileAssets.push_back(rcp<FileAsset>(fa));
@@ -432,6 +436,14 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
                     m_assetLoader,
                     m_factory);
                 stackType = FileAsset::typeKey;
+                break;
+            case ScriptAsset::typeKey:
+                stackObject = rivestd::make_unique<FileAssetImporter>(
+                    object->as<FileAsset>(),
+                    m_assetLoader,
+                    m_factory);
+                stackType = FileAsset::typeKey;
+                object->as<ScriptAsset>()->file(this);
                 break;
             case ViewModel::typeKey:
                 stackObject = rivestd::make_unique<ViewModelImporter>(
@@ -589,6 +601,27 @@ std::unique_ptr<ArtboardInstance> File::artboardNamed(std::string name) const
     return ab ? ab->instance() : nullptr;
 }
 
+rcp<BindableArtboard> File::bindableArtboardNamed(std::string name) const
+{
+    auto ab = this->artboardNamed(name);
+    return ab ? make_rcp<BindableArtboard>(ref_rcp(this), std::move(ab))
+              : nullptr;
+}
+
+rcp<BindableArtboard> File::bindableArtboardDefault() const
+{
+    auto ab = this->artboardDefault();
+    return ab ? make_rcp<BindableArtboard>(ref_rcp(this), std::move(ab))
+              : nullptr;
+}
+
+rcp<BindableArtboard> File::internalBindableArtboardFromArtboard(
+    Artboard* artboard) const
+{
+    auto ab = artboard ? artboard->instance() : nullptr;
+    return ab ? make_rcp<BindableArtboard>(nullptr, std::move(ab)) : nullptr;
+}
+
 void File::completeViewModelInstance(
     rcp<ViewModelInstance> viewModelInstance) const
 {
@@ -615,20 +648,23 @@ void File::completeViewModelInstance(
                     property->as<ViewModelPropertyViewModel>();
                 auto viewModelReference =
                     m_ViewModels[propertViewModel->viewModelReferenceId()];
-                auto viewModelInstance = viewModelReference->instance(
+                auto viewModelReferenceInstance = viewModelReference->instance(
                     valueViewModel->propertyValue());
-                if (viewModelInstance != nullptr)
+                valueViewModel->parentViewModelInstance(
+                    viewModelInstance.get());
+                if (viewModelReferenceInstance != nullptr)
                 {
-                    auto itr = instancesMap.find(viewModelInstance);
+                    auto itr = instancesMap.find(viewModelReferenceInstance);
 
                     if (itr == instancesMap.end())
                     {
-                        auto viewModelInstanceCopy =
-                            copyViewModelInstance(viewModelInstance,
+                        auto viewModelReferenceInstanceCopy =
+                            copyViewModelInstance(viewModelReferenceInstance,
                                                   instancesMap);
-                        instancesMap[viewModelInstance] = viewModelInstanceCopy;
+                        instancesMap[viewModelReferenceInstance] =
+                            viewModelReferenceInstanceCopy;
                         valueViewModel->referenceViewModelInstance(
-                            viewModelInstanceCopy);
+                            viewModelReferenceInstanceCopy);
                     }
                     else
                     {
@@ -640,23 +676,26 @@ void File::completeViewModelInstance(
         else if (value->is<ViewModelInstanceList>())
         {
             auto viewModelList = value->as<ViewModelInstanceList>();
+            viewModelList->parentViewModelInstance(viewModelInstance.get());
             for (auto& listItem : viewModelList->listItems())
             {
                 auto viewModel = m_ViewModels[listItem->viewModelId()];
-                auto viewModelInstance =
+                auto viewModelListItemInstance =
                     viewModel->instance(listItem->viewModelInstanceId());
-                if (viewModelInstance != nullptr)
+                if (viewModelListItemInstance != nullptr)
                 {
 
-                    auto itr = instancesMap.find(viewModelInstance);
+                    auto itr = instancesMap.find(viewModelListItemInstance);
 
                     if (itr == instancesMap.end())
                     {
-                        auto viewModelInstanceCopy =
-                            copyViewModelInstance(viewModelInstance,
+                        auto viewModelInstanceListItemCopy =
+                            copyViewModelInstance(viewModelListItemInstance,
                                                   instancesMap);
-                        instancesMap[viewModelInstance] = viewModelInstanceCopy;
-                        listItem->viewModelInstance(viewModelInstanceCopy);
+                        instancesMap[viewModelListItemInstance] =
+                            viewModelInstanceListItemCopy;
+                        listItem->viewModelInstance(
+                            viewModelInstanceListItemCopy);
                     }
                     else
                     {
@@ -777,6 +816,8 @@ rcp<ViewModelInstance> File::createViewModelInstance(ViewModel* viewModel) const
                     break;
                 case ViewModelPropertyListBase::typeKey:
                     viewModelInstanceValue = new ViewModelInstanceList();
+                    viewModelInstanceValue->as<ViewModelInstanceList>()
+                        ->parentViewModelInstance(viewModelInstance);
                     break;
                 case ViewModelPropertyEnumSystemBase::typeKey:
                 case ViewModelPropertyEnumCustomBase::typeKey:
@@ -796,8 +837,15 @@ rcp<ViewModelInstance> File::createViewModelInstance(ViewModel* viewModel) const
                     auto viewModelInstanceViewModel =
                         viewModelInstanceValue
                             ->as<ViewModelInstanceViewModel>();
-                    viewModelInstanceViewModel->referenceViewModelInstance(
-                        createViewModelInstance(viewModelReference));
+                    auto referenceViewModelInstance =
+                        createViewModelInstance(viewModelReference);
+                    if (referenceViewModelInstance)
+                    {
+                        viewModelInstanceViewModel->parentViewModelInstance(
+                            viewModelInstance);
+                        viewModelInstanceViewModel->referenceViewModelInstance(
+                            referenceViewModelInstance);
+                    }
                 }
                 break;
                 case ViewModelPropertyAssetImageBase::typeKey:

@@ -6,6 +6,7 @@
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/animation/state_machine_input_instance.hpp"
 #include "rive/animation/linear_animation_instance.hpp"
+#include "rive/data_bind/data_bind.hpp"
 #include "rive/viewmodel/viewmodel_instance.hpp"
 #include "rive/viewmodel/viewmodel_instance_artboard.hpp"
 #include "rive/viewmodel/viewmodel_instance_number.hpp"
@@ -57,6 +58,8 @@ static std::unordered_map<WrappedArtboard*, emscripten::val>
     _webLayoutChangedCallbacks;
 static std::unordered_map<WrappedArtboard*, emscripten::val>
     _webLayoutDirtyCallbacks;
+static std::unordered_map<WrappedArtboard*, emscripten::val>
+    _webTransformDirtyCallbacks;
 static std::unordered_map<WrappedArtboard*, emscripten::val> _webEventCallbacks;
 static std::unordered_map<StateMachineInstance*, emscripten::val>
     _webInputChangedCallbacks;
@@ -169,7 +172,7 @@ DataBind* WrappedDataBind::dataBind() { return m_dataBind; }
 class WrappedBindableArtboard
 {
 public:
-    WrappedBindableArtboard(Artboard* artboard, rcp<File> file) :
+    WrappedBindableArtboard(rcp<BindableArtboard> artboard, rcp<File> file) :
         m_file(file), m_artboard(artboard)
     {
 #ifdef DEBUG
@@ -181,7 +184,7 @@ public:
     ~WrappedBindableArtboard() { g_bindableArtboardCount--; }
 #endif
 
-    Artboard* artboard()
+    rcp<BindableArtboard> artboard()
     {
         assert(m_artboard);
         return m_artboard;
@@ -189,7 +192,7 @@ public:
 
 private:
     rcp<File> m_file;
-    Artboard* m_artboard;
+    rcp<BindableArtboard> m_artboard;
 };
 
 WrappedArtboard::WrappedArtboard(
@@ -213,6 +216,7 @@ WrappedArtboard::~WrappedArtboard()
 #if defined(__EMSCRIPTEN__)
     _webLayoutChangedCallbacks.erase(this);
     _webLayoutDirtyCallbacks.erase(this);
+    _webTransformDirtyCallbacks.erase(this);
     _webEventCallbacks.erase(this);
     _webTestBoundsCallbacks.erase(this);
     _webIsAncestorCallbacks.erase(this);
@@ -716,7 +720,7 @@ EXPORT WrappedBindableArtboard* riveFileArtboardToBindNamed(File* file,
     {
         return nullptr;
     }
-    Artboard* artboard = file->artboard(name);
+    rcp<BindableArtboard> artboard = file->bindableArtboardNamed(name);
     if (artboard == nullptr)
     {
         return nullptr;
@@ -1073,13 +1077,14 @@ ViewModelPropertyDataArray generateViewModelPropertyDataArray(
     for (size_t i = 0; i < props.size(); ++i)
     {
         // The string is only valid for the duration of the
-        // call. In Flutter, we would get invalid data or errors when trying to
-        // access the string: return
+        // call. In Flutter, we would get invalid data or errors when trying
+        // to access the string: return
         // viewModel->properties().at(index).name.c_str();
 
-        // We copy the string to the heap and return a pointer to it, because
-        // the string is only valid for the duration of the call. We free up the
-        // memory in the `deleteViewModelPropertyDataArray` function.
+        // We copy the string to the heap and return a pointer to it,
+        // because the string is only valid for the duration of the call. We
+        // free up the memory in the `deleteViewModelPropertyDataArray`
+        // function.
         const std::string& name = props[i].name;
         char* cstr = (char*)malloc(name.size() + 1);
         std::memcpy(cstr, name.c_str(), name.size() + 1);
@@ -1188,7 +1193,7 @@ EXPORT WrappedVMIRuntime* createVMIRuntimeFromIndex(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(vmi));
+    return new WrappedVMIRuntime(vmi);
 }
 
 EXPORT WrappedVMIRuntime* createVMIRuntimeFromName(
@@ -1204,7 +1209,7 @@ EXPORT WrappedVMIRuntime* createVMIRuntimeFromName(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(vmi));
+    return new WrappedVMIRuntime(vmi);
 }
 
 EXPORT WrappedVMIRuntime* createDefaultVMIRuntime(
@@ -1219,7 +1224,7 @@ EXPORT WrappedVMIRuntime* createDefaultVMIRuntime(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(vmi));
+    return new WrappedVMIRuntime(vmi);
 }
 
 EXPORT WrappedVMIRuntime* createVMIRuntime(
@@ -1234,7 +1239,7 @@ EXPORT WrappedVMIRuntime* createVMIRuntime(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(vmi));
+    return new WrappedVMIRuntime(vmi);
 }
 
 EXPORT WrappedVMIRuntime* vmiRuntimeGetViewModelProperty(
@@ -1255,7 +1260,7 @@ EXPORT WrappedVMIRuntime* vmiRuntimeGetViewModelProperty(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(vmi));
+    return new WrappedVMIRuntime(vmi);
 }
 
 EXPORT WrappedVMINumberRuntime* vmiRuntimeGetNumberProperty(
@@ -1629,7 +1634,7 @@ EXPORT WrappedVMIRuntime* vmiListRuntimeInstanceAt(
     {
         return nullptr;
     }
-    return new WrappedVMIRuntime(ref_rcp(viewModelInstance));
+    return new WrappedVMIRuntime(viewModelInstance);
 }
 
 EXPORT void vmiListRuntimeSwap(WrappedVMIListRuntime* wrappedListProperty,
@@ -1916,6 +1921,10 @@ EXPORT void deleteViewModelInstance(ViewModelInstance* viewModelInstance)
 
 EXPORT void deleteViewModelInstanceValue(ViewModelInstanceValue* value)
 {
+    if (value == nullptr)
+    {
+        return;
+    }
     std::unique_lock<std::mutex> lock(g_deleteMutex);
     value->unref();
 }
@@ -2939,51 +2948,59 @@ EXPORT bool stateMachineInstanceHitTest(WrappedStateMachine* wrappedMachine,
 EXPORT uint8_t
 stateMachineInstancePointerDown(WrappedStateMachine* wrappedMachine,
                                 float x,
-                                float y)
+                                float y,
+                                int pointerId)
 {
     if (wrappedMachine == nullptr)
     {
         return false;
     }
-    return (uint8_t)wrappedMachine->stateMachine()->pointerDown(Vec2D(x, y));
+    return (uint8_t)wrappedMachine->stateMachine()->pointerDown(Vec2D(x, y),
+                                                                pointerId);
 }
 
 EXPORT uint8_t
 stateMachineInstancePointerExit(WrappedStateMachine* wrappedMachine,
                                 float x,
-                                float y)
+                                float y,
+                                int pointerId)
 {
     if (wrappedMachine == nullptr)
     {
         return false;
     }
-    return (uint8_t)wrappedMachine->stateMachine()->pointerExit(Vec2D(x, y));
+    return (uint8_t)wrappedMachine->stateMachine()->pointerExit(Vec2D(x, y),
+                                                                pointerId);
 }
 
 EXPORT uint8_t
 stateMachineInstancePointerMove(WrappedStateMachine* wrappedMachine,
                                 float x,
                                 float y,
-                                float timeStamp)
+                                float timeStamp,
+                                int pointerId)
 {
     if (wrappedMachine == nullptr)
     {
         return false;
     }
     return (uint8_t)wrappedMachine->stateMachine()->pointerMove(Vec2D(x, y),
-                                                                timeStamp);
+                                                                timeStamp,
+                                                                pointerId);
 }
 
 EXPORT uint8_t
 stateMachineInstancePointerUp(WrappedStateMachine* wrappedMachine,
                               float x,
-                              float y)
+                              float y,
+                              int pointerId)
 {
     if (wrappedMachine == nullptr)
     {
         return false;
     }
-    return (uint8_t)wrappedMachine->stateMachine()->pointerUp(Vec2D(x, y));
+    return (uint8_t)wrappedMachine->stateMachine()->pointerUp(Vec2D(x, y),
+                                                              pointerId);
 }
 
 EXPORT uint8_t
@@ -3263,6 +3280,16 @@ static void _webLayoutDirty(void* artboardPtr)
     }
 }
 
+static void _webTransformDirty(void* artboardPtr)
+{
+    auto artboard = static_cast<WrappedArtboard*>(artboardPtr);
+    auto itr = _webTransformDirtyCallbacks.find(artboard);
+    if (itr != _webTransformDirtyCallbacks.end())
+    {
+        itr->second();
+    }
+}
+
 static void _webEvent(WrappedArtboard* artboard, uint32_t id)
 {
     auto itr = _webEventCallbacks.find(artboard);
@@ -3427,6 +3454,27 @@ EXPORT void setArtboardLayoutDirtyCallback(WasmPtr artboardPtr,
     }
 }
 
+EXPORT void setArtboardTransformDirtyCallback(
+    WasmPtr artboardPtr,
+    emscripten::val transformDirtyCallback)
+{
+    auto wrappedArtboard = (WrappedArtboard*)artboardPtr;
+    if (wrappedArtboard == nullptr)
+    {
+        return;
+    }
+    if (transformDirtyCallback.isNull())
+    {
+        _webTransformDirtyCallbacks.erase(wrappedArtboard);
+        wrappedArtboard->artboard()->onTransformDirty(nullptr);
+    }
+    else
+    {
+        _webTransformDirtyCallbacks[wrappedArtboard] = transformDirtyCallback;
+        wrappedArtboard->artboard()->onTransformDirty(_webTransformDirty);
+    }
+}
+
 EXPORT void setArtboardEventCallback(WasmPtr artboardPtr,
                                      emscripten::val eventCallback)
 {
@@ -3551,6 +3599,17 @@ EXPORT void setArtboardLayoutDirtyCallback(WrappedArtboard* wrappedArtboard,
         return;
     }
     wrappedArtboard->artboard()->onLayoutDirty(layoutDirtyCallback);
+}
+
+EXPORT void setArtboardTransformDirtyCallback(
+    WrappedArtboard* wrappedArtboard,
+    ArtboardCallback transformDirtyCallback)
+{
+    if (wrappedArtboard == nullptr)
+    {
+        return;
+    }
+    wrappedArtboard->artboard()->onTransformDirty(transformDirtyCallback);
 }
 
 EXPORT void setStateMachineInputChangedCallback(
@@ -4838,6 +4897,8 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
     function("setArtboardLayoutChangedCallback",
              &setArtboardLayoutChangedCallback);
     function("setArtboardLayoutDirtyCallback", &setArtboardLayoutDirtyCallback);
+    function("setArtboardTransformDirtyCallback",
+             &setArtboardTransformDirtyCallback);
     function("setStateMachineInputChangedCallback",
              &setStateMachineInputChangedCallback);
     function("setArtboardEventCallback", &setArtboardEventCallback);

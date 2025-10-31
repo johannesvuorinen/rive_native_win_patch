@@ -74,6 +74,7 @@
 #include "rive/animation/transition_property_viewmodel_comparator.hpp"
 #include "rive/animation/transition_self_comparator.hpp"
 #include "rive/animation/transition_trigger_condition.hpp"
+#include "rive/animation/transition_value_artboard_comparator.hpp"
 #include "rive/animation/transition_value_asset_comparator.hpp"
 #include "rive/animation/transition_value_boolean_comparator.hpp"
 #include "rive/animation/transition_value_color_comparator.hpp"
@@ -96,6 +97,7 @@
 #include "rive/assets/folder.hpp"
 #include "rive/assets/font_asset.hpp"
 #include "rive/assets/image_asset.hpp"
+#include "rive/assets/script_asset.hpp"
 #include "rive/audio_event.hpp"
 #include "rive/backboard.hpp"
 #include "rive/bones/bone.hpp"
@@ -111,6 +113,7 @@
 #include "rive/constraints/draggable_constraint.hpp"
 #include "rive/constraints/follow_path_constraint.hpp"
 #include "rive/constraints/ik_constraint.hpp"
+#include "rive/constraints/list_follow_path_constraint.hpp"
 #include "rive/constraints/rotation_constraint.hpp"
 #include "rive/constraints/scale_constraint.hpp"
 #include "rive/constraints/scrolling/clamped_scroll_physics.hpp"
@@ -198,6 +201,14 @@
 #include "rive/nested_artboard_leaf.hpp"
 #include "rive/node.hpp"
 #include "rive/open_url_event.hpp"
+#include "rive/script_input_artboard.hpp"
+#include "rive/script_input_boolean.hpp"
+#include "rive/script_input_color.hpp"
+#include "rive/script_input_number.hpp"
+#include "rive/script_input_string.hpp"
+#include "rive/script_input_trigger.hpp"
+#include "rive/script_input_viewmodel_property.hpp"
+#include "rive/scripted/scripted_drawable.hpp"
 #include "rive/shapes/clipping_shape.hpp"
 #include "rive/shapes/contour_mesh_vertex.hpp"
 #include "rive/shapes/cubic_asymmetric_vertex.hpp"
@@ -371,16 +382,24 @@ public:
                 return new ViewModelInstanceAssetImage();
             case DataEnumValueBase::typeKey:
                 return new DataEnumValue();
+            case CustomPropertyTriggerBase::typeKey:
+                return new CustomPropertyTrigger();
+            case ScriptInputTriggerBase::typeKey:
+                return new ScriptInputTrigger();
             case DrawTargetBase::typeKey:
                 return new DrawTarget();
             case CustomPropertyNumberBase::typeKey:
                 return new CustomPropertyNumber();
+            case ScriptInputViewModelPropertyBase::typeKey:
+                return new ScriptInputViewModelProperty();
             case DistanceConstraintBase::typeKey:
                 return new DistanceConstraint();
-            case IKConstraintBase::typeKey:
-                return new IKConstraint();
             case FollowPathConstraintBase::typeKey:
                 return new FollowPathConstraint();
+            case ListFollowPathConstraintBase::typeKey:
+                return new ListFollowPathConstraint();
+            case IKConstraintBase::typeKey:
+                return new IKConstraint();
             case TranslationConstraintBase::typeKey:
                 return new TranslationConstraint();
             case ClampedScrollPhysicsBase::typeKey:
@@ -409,6 +428,10 @@ public:
                 return new CustomPropertyColor();
             case SoloBase::typeKey:
                 return new Solo();
+            case ScriptedDrawableBase::typeKey:
+                return new ScriptedDrawable();
+            case ScriptInputNumberBase::typeKey:
+                return new ScriptInputNumber();
             case NestedArtboardLayoutBase::typeKey:
                 return new NestedArtboardLayout();
             case NSlicerTileModeBase::typeKey:
@@ -533,6 +556,8 @@ public:
                 return new TransitionValueEnumComparator();
             case KeyFrameCallbackBase::typeKey:
                 return new KeyFrameCallback();
+            case TransitionValueArtboardComparatorBase::typeKey:
+                return new TransitionValueArtboardComparator();
             case TransitionValueStringComparatorBase::typeKey:
                 return new TransitionValueStringComparator();
             case NestedRemapAnimationBase::typeKey:
@@ -607,10 +632,14 @@ public:
                 return new CustomPropertyGroup();
             case EventBase::typeKey:
                 return new Event();
-            case DrawRulesBase::typeKey:
-                return new DrawRules();
             case CustomPropertyBooleanBase::typeKey:
                 return new CustomPropertyBoolean();
+            case ScriptInputBooleanBase::typeKey:
+                return new ScriptInputBoolean();
+            case ScriptInputColorBase::typeKey:
+                return new ScriptInputColor();
+            case DrawRulesBase::typeKey:
+                return new DrawRules();
             case LayoutComponentBase::typeKey:
                 return new LayoutComponent();
             case ArtboardBase::typeKey:
@@ -621,6 +650,10 @@ public:
                 return new Backboard();
             case OpenUrlEventBase::typeKey:
                 return new OpenUrlEvent();
+            case CustomPropertyStringBase::typeKey:
+                return new CustomPropertyString();
+            case ScriptInputStringBase::typeKey:
+                return new ScriptInputString();
             case BindablePropertyArtboardBase::typeKey:
                 return new BindablePropertyArtboard();
             case BindablePropertyIntegerBase::typeKey:
@@ -749,10 +782,10 @@ public:
                 return new TextValueRun();
             case CustomPropertyEnumBase::typeKey:
                 return new CustomPropertyEnum();
-            case CustomPropertyStringBase::typeKey:
-                return new CustomPropertyString();
             case FolderBase::typeKey:
                 return new Folder();
+            case ScriptAssetBase::typeKey:
+                return new ScriptAsset();
             case ImageAssetBase::typeKey:
                 return new ImageAsset();
             case FontAssetBase::typeKey:
@@ -763,8 +796,8 @@ public:
                 return new FileAssetContents();
             case AudioEventBase::typeKey:
                 return new AudioEvent();
-            case CustomPropertyTriggerBase::typeKey:
-                return new CustomPropertyTrigger();
+            case ScriptInputArtboardBase::typeKey:
+                return new ScriptInputArtboard();
         }
         return nullptr;
     }
@@ -828,6 +861,9 @@ public:
             case ViewModelInstanceAssetBase::propertyValuePropertyKey:
                 object->as<ViewModelInstanceAssetBase>()->propertyValue(value);
                 break;
+            case CustomPropertyTriggerBase::propertyValuePropertyKey:
+                object->as<CustomPropertyTriggerBase>()->propertyValue(value);
+                break;
             case DrawTargetBase::drawableIdPropertyKey:
                 object->as<DrawTargetBase>()->drawableId(value);
                 break;
@@ -888,6 +924,9 @@ public:
                 break;
             case SoloBase::activeComponentIdPropertyKey:
                 object->as<SoloBase>()->activeComponentId(value);
+                break;
+            case ScriptedDrawableBase::scriptAssetIdPropertyKey:
+                object->as<ScriptedDrawableBase>()->scriptAssetId(value);
                 break;
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 object->as<NestedArtboardLayoutBase>()->instanceWidthUnitsValue(
@@ -1454,11 +1493,16 @@ public:
             case FileAssetBase::assetIdPropertyKey:
                 object->as<FileAssetBase>()->assetId(value);
                 break;
+#ifdef WITH_RIVE_TOOLS
+            case ScriptAssetBase::generatorFunctionRefPropertyKey:
+                object->as<ScriptAssetBase>()->generatorFunctionRef(value);
+                break;
+#endif
             case AudioEventBase::assetIdPropertyKey:
                 object->as<AudioEventBase>()->assetId(value);
                 break;
-            case CustomPropertyTriggerBase::propertyValuePropertyKey:
-                object->as<CustomPropertyTriggerBase>()->propertyValue(value);
+            case ScriptInputArtboardBase::artboardIdPropertyKey:
+                object->as<ScriptInputArtboardBase>()->artboardId(value);
                 break;
         }
     }
@@ -1499,6 +1543,9 @@ public:
             case OpenUrlEventBase::urlPropertyKey:
                 object->as<OpenUrlEventBase>()->url(value);
                 break;
+            case CustomPropertyStringBase::propertyValuePropertyKey:
+                object->as<CustomPropertyStringBase>()->propertyValue(value);
+                break;
             case DataConverterBase::namePropertyKey:
                 object->as<DataConverterBase>()->name(value);
                 break;
@@ -1516,9 +1563,6 @@ public:
                 break;
             case TextValueRunBase::textPropertyKey:
                 object->as<TextValueRunBase>()->text(value);
-                break;
-            case CustomPropertyStringBase::propertyValuePropertyKey:
-                object->as<CustomPropertyStringBase>()->propertyValue(value);
                 break;
             case AssetBase::namePropertyKey:
                 object->as<AssetBase>()->name(value);
@@ -1563,6 +1607,12 @@ public:
                 object->as<ViewModelInstanceBooleanBase>()->propertyValue(
                     value);
                 break;
+            case FollowPathConstraintBase::orientPropertyKey:
+                object->as<FollowPathConstraintBase>()->orient(value);
+                break;
+            case FollowPathConstraintBase::offsetPropertyKey:
+                object->as<FollowPathConstraintBase>()->offset(value);
+                break;
             case TransformComponentConstraintBase::offsetPropertyKey:
                 object->as<TransformComponentConstraintBase>()->offset(value);
                 break;
@@ -1588,12 +1638,6 @@ public:
             case IKConstraintBase::invertDirectionPropertyKey:
                 object->as<IKConstraintBase>()->invertDirection(value);
                 break;
-            case FollowPathConstraintBase::orientPropertyKey:
-                object->as<FollowPathConstraintBase>()->orient(value);
-                break;
-            case FollowPathConstraintBase::offsetPropertyKey:
-                object->as<FollowPathConstraintBase>()->offset(value);
-                break;
             case ScrollConstraintBase::snapPropertyKey:
                 object->as<ScrollConstraintBase>()->snap(value);
                 break;
@@ -1603,8 +1647,14 @@ public:
             case ScrollConstraintBase::infinitePropertyKey:
                 object->as<ScrollConstraintBase>()->infinite(value);
                 break;
+            case ScrollConstraintBase::interactivePropertyKey:
+                object->as<ScrollConstraintBase>()->interactive(value);
+                break;
             case ScrollBarConstraintBase::autoSizePropertyKey:
                 object->as<ScrollBarConstraintBase>()->autoSize(value);
+                break;
+            case NestedArtboardBase::isPausedPropertyKey:
+                object->as<NestedArtboardBase>()->isPaused(value);
                 break;
             case AxisBase::normalizedPropertyKey:
                 object->as<AxisBase>()->normalized(value);
@@ -1707,6 +1757,16 @@ public:
             case DistanceConstraintBase::distancePropertyKey:
                 object->as<DistanceConstraintBase>()->distance(value);
                 break;
+            case FollowPathConstraintBase::distancePropertyKey:
+                object->as<FollowPathConstraintBase>()->distance(value);
+                break;
+            case ListFollowPathConstraintBase::distanceEndPropertyKey:
+                object->as<ListFollowPathConstraintBase>()->distanceEnd(value);
+                break;
+            case ListFollowPathConstraintBase::distanceOffsetPropertyKey:
+                object->as<ListFollowPathConstraintBase>()->distanceOffset(
+                    value);
+                break;
             case TransformComponentConstraintBase::copyFactorPropertyKey:
                 object->as<TransformComponentConstraintBase>()->copyFactor(
                     value);
@@ -1729,9 +1789,6 @@ public:
                 object->as<TransformComponentConstraintYBase>()->maxValueY(
                     value);
                 break;
-            case FollowPathConstraintBase::distancePropertyKey:
-                object->as<FollowPathConstraintBase>()->distance(value);
-                break;
             case ScrollConstraintBase::scrollOffsetXPropertyKey:
                 object->as<ScrollConstraintBase>()->scrollOffsetX(value);
                 break;
@@ -1746,6 +1803,9 @@ public:
                 break;
             case ScrollConstraintBase::scrollIndexPropertyKey:
                 object->as<ScrollConstraintBase>()->scrollIndex(value);
+                break;
+            case ScrollConstraintBase::thresholdPropertyKey:
+                object->as<ScrollConstraintBase>()->threshold(value);
                 break;
             case ElasticScrollPhysicsBase::frictionPropertyKey:
                 object->as<ElasticScrollPhysicsBase>()->friction(value);
@@ -2347,14 +2407,14 @@ public:
     {
         switch (propertyKey)
         {
+            case CustomPropertyTriggerBase::firePropertyKey:
+                object->as<CustomPropertyTriggerBase>()->fire(value);
+                break;
             case NestedTriggerBase::firePropertyKey:
                 object->as<NestedTriggerBase>()->fire(value);
                 break;
             case EventBase::triggerPropertyKey:
                 object->as<EventBase>()->trigger(value);
-                break;
-            case CustomPropertyTriggerBase::firePropertyKey:
-                object->as<CustomPropertyTriggerBase>()->fire(value);
                 break;
         }
     }
@@ -2405,6 +2465,8 @@ public:
             case ViewModelInstanceAssetBase::propertyValuePropertyKey:
                 return object->as<ViewModelInstanceAssetBase>()
                     ->propertyValue();
+            case CustomPropertyTriggerBase::propertyValuePropertyKey:
+                return object->as<CustomPropertyTriggerBase>()->propertyValue();
             case DrawTargetBase::drawableIdPropertyKey:
                 return object->as<DrawTargetBase>()->drawableId();
             case DrawTargetBase::placementValuePropertyKey:
@@ -2447,6 +2509,8 @@ public:
                 return object->as<NestedAnimationBase>()->animationId();
             case SoloBase::activeComponentIdPropertyKey:
                 return object->as<SoloBase>()->activeComponentId();
+            case ScriptedDrawableBase::scriptAssetIdPropertyKey:
+                return object->as<ScriptedDrawableBase>()->scriptAssetId();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 return object->as<NestedArtboardLayoutBase>()
                     ->instanceWidthUnitsValue();
@@ -2851,10 +2915,14 @@ public:
                 return object->as<CustomPropertyEnumBase>()->enumId();
             case FileAssetBase::assetIdPropertyKey:
                 return object->as<FileAssetBase>()->assetId();
+#ifdef WITH_RIVE_TOOLS
+            case ScriptAssetBase::generatorFunctionRefPropertyKey:
+                return object->as<ScriptAssetBase>()->generatorFunctionRef();
+#endif
             case AudioEventBase::assetIdPropertyKey:
                 return object->as<AudioEventBase>()->assetId();
-            case CustomPropertyTriggerBase::propertyValuePropertyKey:
-                return object->as<CustomPropertyTriggerBase>()->propertyValue();
+            case ScriptInputArtboardBase::artboardIdPropertyKey:
+                return object->as<ScriptInputArtboardBase>()->artboardId();
         }
         return 0;
     }
@@ -2886,6 +2954,8 @@ public:
                     ->value();
             case OpenUrlEventBase::urlPropertyKey:
                 return object->as<OpenUrlEventBase>()->url();
+            case CustomPropertyStringBase::propertyValuePropertyKey:
+                return object->as<CustomPropertyStringBase>()->propertyValue();
             case DataConverterBase::namePropertyKey:
                 return object->as<DataConverterBase>()->name();
             case DataConverterStringPadBase::textPropertyKey:
@@ -2899,8 +2969,6 @@ public:
                 return object->as<TextInputBase>()->text();
             case TextValueRunBase::textPropertyKey:
                 return object->as<TextValueRunBase>()->text();
-            case CustomPropertyStringBase::propertyValuePropertyKey:
-                return object->as<CustomPropertyStringBase>()->propertyValue();
             case AssetBase::namePropertyKey:
                 return object->as<AssetBase>()->name();
             case FileAssetBase::cdnBaseUrlPropertyKey:
@@ -2938,6 +3006,10 @@ public:
             case ViewModelInstanceBooleanBase::propertyValuePropertyKey:
                 return object->as<ViewModelInstanceBooleanBase>()
                     ->propertyValue();
+            case FollowPathConstraintBase::orientPropertyKey:
+                return object->as<FollowPathConstraintBase>()->orient();
+            case FollowPathConstraintBase::offsetPropertyKey:
+                return object->as<FollowPathConstraintBase>()->offset();
             case TransformComponentConstraintBase::offsetPropertyKey:
                 return object->as<TransformComponentConstraintBase>()->offset();
             case TransformComponentConstraintBase::doesCopyPropertyKey:
@@ -2956,18 +3028,18 @@ public:
                 return object->as<TransformComponentConstraintYBase>()->maxY();
             case IKConstraintBase::invertDirectionPropertyKey:
                 return object->as<IKConstraintBase>()->invertDirection();
-            case FollowPathConstraintBase::orientPropertyKey:
-                return object->as<FollowPathConstraintBase>()->orient();
-            case FollowPathConstraintBase::offsetPropertyKey:
-                return object->as<FollowPathConstraintBase>()->offset();
             case ScrollConstraintBase::snapPropertyKey:
                 return object->as<ScrollConstraintBase>()->snap();
             case ScrollConstraintBase::virtualizePropertyKey:
                 return object->as<ScrollConstraintBase>()->virtualize();
             case ScrollConstraintBase::infinitePropertyKey:
                 return object->as<ScrollConstraintBase>()->infinite();
+            case ScrollConstraintBase::interactivePropertyKey:
+                return object->as<ScrollConstraintBase>()->interactive();
             case ScrollBarConstraintBase::autoSizePropertyKey:
                 return object->as<ScrollBarConstraintBase>()->autoSize();
+            case NestedArtboardBase::isPausedPropertyKey:
+                return object->as<NestedArtboardBase>()->isPaused();
             case AxisBase::normalizedPropertyKey:
                 return object->as<AxisBase>()->normalized();
             case LayoutComponentStyleBase::intrinsicallySizedValuePropertyKey:
@@ -3042,6 +3114,14 @@ public:
                 return object->as<ConstraintBase>()->strength();
             case DistanceConstraintBase::distancePropertyKey:
                 return object->as<DistanceConstraintBase>()->distance();
+            case FollowPathConstraintBase::distancePropertyKey:
+                return object->as<FollowPathConstraintBase>()->distance();
+            case ListFollowPathConstraintBase::distanceEndPropertyKey:
+                return object->as<ListFollowPathConstraintBase>()
+                    ->distanceEnd();
+            case ListFollowPathConstraintBase::distanceOffsetPropertyKey:
+                return object->as<ListFollowPathConstraintBase>()
+                    ->distanceOffset();
             case TransformComponentConstraintBase::copyFactorPropertyKey:
                 return object->as<TransformComponentConstraintBase>()
                     ->copyFactor();
@@ -3060,8 +3140,6 @@ public:
             case TransformComponentConstraintYBase::maxValueYPropertyKey:
                 return object->as<TransformComponentConstraintYBase>()
                     ->maxValueY();
-            case FollowPathConstraintBase::distancePropertyKey:
-                return object->as<FollowPathConstraintBase>()->distance();
             case ScrollConstraintBase::scrollOffsetXPropertyKey:
                 return object->as<ScrollConstraintBase>()->scrollOffsetX();
             case ScrollConstraintBase::scrollOffsetYPropertyKey:
@@ -3072,6 +3150,8 @@ public:
                 return object->as<ScrollConstraintBase>()->scrollPercentY();
             case ScrollConstraintBase::scrollIndexPropertyKey:
                 return object->as<ScrollConstraintBase>()->scrollIndex();
+            case ScrollConstraintBase::thresholdPropertyKey:
+                return object->as<ScrollConstraintBase>()->threshold();
             case ElasticScrollPhysicsBase::frictionPropertyKey:
                 return object->as<ElasticScrollPhysicsBase>()->friction();
             case ElasticScrollPhysicsBase::speedMultiplierPropertyKey:
@@ -3497,6 +3577,7 @@ public:
             case ViewModelInstanceSymbolListIndexBase::propertyValuePropertyKey:
             case ViewModelInstanceViewModelBase::propertyValuePropertyKey:
             case ViewModelInstanceAssetBase::propertyValuePropertyKey:
+            case CustomPropertyTriggerBase::propertyValuePropertyKey:
             case DrawTargetBase::drawableIdPropertyKey:
             case DrawTargetBase::placementValuePropertyKey:
             case TargetedConstraintBase::targetIdPropertyKey:
@@ -3516,6 +3597,7 @@ public:
             case ArtboardComponentListBase::listSourcePropertyKey:
             case NestedAnimationBase::animationIdPropertyKey:
             case SoloBase::activeComponentIdPropertyKey:
+            case ScriptedDrawableBase::scriptAssetIdPropertyKey:
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
             case NestedArtboardLayoutBase::instanceHeightUnitsValuePropertyKey:
             case NestedArtboardLayoutBase::instanceWidthScaleTypePropertyKey:
@@ -3691,8 +3773,11 @@ public:
             case CustomPropertyEnumBase::propertyValuePropertyKey:
             case CustomPropertyEnumBase::enumIdPropertyKey:
             case FileAssetBase::assetIdPropertyKey:
+#ifdef WITH_RIVE_TOOLS
+            case ScriptAssetBase::generatorFunctionRefPropertyKey:
+#endif
             case AudioEventBase::assetIdPropertyKey:
-            case CustomPropertyTriggerBase::propertyValuePropertyKey:
+            case ScriptInputArtboardBase::artboardIdPropertyKey:
                 return CoreUintType::id;
             case ViewModelComponentBase::namePropertyKey:
             case DataEnumCustomBase::namePropertyKey:
@@ -3705,13 +3790,13 @@ public:
             case KeyFrameStringBase::valuePropertyKey:
             case TransitionValueStringComparatorBase::valuePropertyKey:
             case OpenUrlEventBase::urlPropertyKey:
+            case CustomPropertyStringBase::propertyValuePropertyKey:
             case DataConverterBase::namePropertyKey:
             case DataConverterStringPadBase::textPropertyKey:
             case DataConverterToStringBase::colorFormatPropertyKey:
             case BindablePropertyStringBase::propertyValuePropertyKey:
             case TextInputBase::textPropertyKey:
             case TextValueRunBase::textPropertyKey:
-            case CustomPropertyStringBase::propertyValuePropertyKey:
             case AssetBase::namePropertyKey:
             case FileAssetBase::cdnBaseUrlPropertyKey:
                 return CoreStringType::id;
@@ -3724,6 +3809,8 @@ public:
             case BindablePropertyColorBase::propertyValuePropertyKey:
                 return CoreColorType::id;
             case ViewModelInstanceBooleanBase::propertyValuePropertyKey:
+            case FollowPathConstraintBase::orientPropertyKey:
+            case FollowPathConstraintBase::offsetPropertyKey:
             case TransformComponentConstraintBase::offsetPropertyKey:
             case TransformComponentConstraintBase::doesCopyPropertyKey:
             case TransformComponentConstraintBase::minPropertyKey:
@@ -3732,12 +3819,12 @@ public:
             case TransformComponentConstraintYBase::minYPropertyKey:
             case TransformComponentConstraintYBase::maxYPropertyKey:
             case IKConstraintBase::invertDirectionPropertyKey:
-            case FollowPathConstraintBase::orientPropertyKey:
-            case FollowPathConstraintBase::offsetPropertyKey:
             case ScrollConstraintBase::snapPropertyKey:
             case ScrollConstraintBase::virtualizePropertyKey:
             case ScrollConstraintBase::infinitePropertyKey:
+            case ScrollConstraintBase::interactivePropertyKey:
             case ScrollBarConstraintBase::autoSizePropertyKey:
+            case NestedArtboardBase::isPausedPropertyKey:
             case AxisBase::normalizedPropertyKey:
             case LayoutComponentStyleBase::intrinsicallySizedValuePropertyKey:
             case LayoutComponentStyleBase::linkCornerRadiusPropertyKey:
@@ -3770,18 +3857,21 @@ public:
             case CustomPropertyNumberBase::propertyValuePropertyKey:
             case ConstraintBase::strengthPropertyKey:
             case DistanceConstraintBase::distancePropertyKey:
+            case FollowPathConstraintBase::distancePropertyKey:
+            case ListFollowPathConstraintBase::distanceEndPropertyKey:
+            case ListFollowPathConstraintBase::distanceOffsetPropertyKey:
             case TransformComponentConstraintBase::copyFactorPropertyKey:
             case TransformComponentConstraintBase::minValuePropertyKey:
             case TransformComponentConstraintBase::maxValuePropertyKey:
             case TransformComponentConstraintYBase::copyFactorYPropertyKey:
             case TransformComponentConstraintYBase::minValueYPropertyKey:
             case TransformComponentConstraintYBase::maxValueYPropertyKey:
-            case FollowPathConstraintBase::distancePropertyKey:
             case ScrollConstraintBase::scrollOffsetXPropertyKey:
             case ScrollConstraintBase::scrollOffsetYPropertyKey:
             case ScrollConstraintBase::scrollPercentXPropertyKey:
             case ScrollConstraintBase::scrollPercentYPropertyKey:
             case ScrollConstraintBase::scrollIndexPropertyKey:
+            case ScrollConstraintBase::thresholdPropertyKey:
             case ElasticScrollPhysicsBase::frictionPropertyKey:
             case ElasticScrollPhysicsBase::speedMultiplierPropertyKey:
             case ElasticScrollPhysicsBase::elasticFactorPropertyKey:
@@ -3981,6 +4071,7 @@ public:
             case DrawableAssetBase::widthPropertyKey:
             case ExportAudioBase::volumePropertyKey:
                 return CoreDoubleType::id;
+            case ScriptInputViewModelPropertyBase::dataBindPathIdsPropertyKey:
             case NestedArtboardBase::dataBindPathIdsPropertyKey:
             case StateMachineFireTriggerBase::viewModelPathIdsPropertyKey:
             case StateMachineListenerBase::viewModelPathIdsPropertyKey:
@@ -3998,9 +4089,9 @@ public:
     {
         switch (propertyKey)
         {
+            case CustomPropertyTriggerBase::firePropertyKey:
             case NestedTriggerBase::firePropertyKey:
             case EventBase::triggerPropertyKey:
-            case CustomPropertyTriggerBase::firePropertyKey:
                 return true;
             default:
                 return false;
@@ -4043,6 +4134,8 @@ public:
                 return object->is<ViewModelInstanceViewModelBase>();
             case ViewModelInstanceAssetBase::propertyValuePropertyKey:
                 return object->is<ViewModelInstanceAssetBase>();
+            case CustomPropertyTriggerBase::propertyValuePropertyKey:
+                return object->is<CustomPropertyTriggerBase>();
             case DrawTargetBase::drawableIdPropertyKey:
                 return object->is<DrawTargetBase>();
             case DrawTargetBase::placementValuePropertyKey:
@@ -4081,6 +4174,8 @@ public:
                 return object->is<NestedAnimationBase>();
             case SoloBase::activeComponentIdPropertyKey:
                 return object->is<SoloBase>();
+            case ScriptedDrawableBase::scriptAssetIdPropertyKey:
+                return object->is<ScriptedDrawableBase>();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 return object->is<NestedArtboardLayoutBase>();
             case NestedArtboardLayoutBase::instanceHeightUnitsValuePropertyKey:
@@ -4426,10 +4521,14 @@ public:
                 return object->is<CustomPropertyEnumBase>();
             case FileAssetBase::assetIdPropertyKey:
                 return object->is<FileAssetBase>();
+#ifdef WITH_RIVE_TOOLS
+            case ScriptAssetBase::generatorFunctionRefPropertyKey:
+                return object->is<ScriptAssetBase>();
+#endif
             case AudioEventBase::assetIdPropertyKey:
                 return object->is<AudioEventBase>();
-            case CustomPropertyTriggerBase::propertyValuePropertyKey:
-                return object->is<CustomPropertyTriggerBase>();
+            case ScriptInputArtboardBase::artboardIdPropertyKey:
+                return object->is<ScriptInputArtboardBase>();
             case ViewModelComponentBase::namePropertyKey:
                 return object->is<ViewModelComponentBase>();
             case DataEnumCustomBase::namePropertyKey:
@@ -4452,6 +4551,8 @@ public:
                 return object->is<TransitionValueStringComparatorBase>();
             case OpenUrlEventBase::urlPropertyKey:
                 return object->is<OpenUrlEventBase>();
+            case CustomPropertyStringBase::propertyValuePropertyKey:
+                return object->is<CustomPropertyStringBase>();
             case DataConverterBase::namePropertyKey:
                 return object->is<DataConverterBase>();
             case DataConverterStringPadBase::textPropertyKey:
@@ -4464,8 +4565,6 @@ public:
                 return object->is<TextInputBase>();
             case TextValueRunBase::textPropertyKey:
                 return object->is<TextValueRunBase>();
-            case CustomPropertyStringBase::propertyValuePropertyKey:
-                return object->is<CustomPropertyStringBase>();
             case AssetBase::namePropertyKey:
                 return object->is<AssetBase>();
             case FileAssetBase::cdnBaseUrlPropertyKey:
@@ -4486,6 +4585,10 @@ public:
                 return object->is<BindablePropertyColorBase>();
             case ViewModelInstanceBooleanBase::propertyValuePropertyKey:
                 return object->is<ViewModelInstanceBooleanBase>();
+            case FollowPathConstraintBase::orientPropertyKey:
+                return object->is<FollowPathConstraintBase>();
+            case FollowPathConstraintBase::offsetPropertyKey:
+                return object->is<FollowPathConstraintBase>();
             case TransformComponentConstraintBase::offsetPropertyKey:
                 return object->is<TransformComponentConstraintBase>();
             case TransformComponentConstraintBase::doesCopyPropertyKey:
@@ -4502,18 +4605,18 @@ public:
                 return object->is<TransformComponentConstraintYBase>();
             case IKConstraintBase::invertDirectionPropertyKey:
                 return object->is<IKConstraintBase>();
-            case FollowPathConstraintBase::orientPropertyKey:
-                return object->is<FollowPathConstraintBase>();
-            case FollowPathConstraintBase::offsetPropertyKey:
-                return object->is<FollowPathConstraintBase>();
             case ScrollConstraintBase::snapPropertyKey:
                 return object->is<ScrollConstraintBase>();
             case ScrollConstraintBase::virtualizePropertyKey:
                 return object->is<ScrollConstraintBase>();
             case ScrollConstraintBase::infinitePropertyKey:
                 return object->is<ScrollConstraintBase>();
+            case ScrollConstraintBase::interactivePropertyKey:
+                return object->is<ScrollConstraintBase>();
             case ScrollBarConstraintBase::autoSizePropertyKey:
                 return object->is<ScrollBarConstraintBase>();
+            case NestedArtboardBase::isPausedPropertyKey:
+                return object->is<NestedArtboardBase>();
             case AxisBase::normalizedPropertyKey:
                 return object->is<AxisBase>();
             case LayoutComponentStyleBase::intrinsicallySizedValuePropertyKey:
@@ -4576,6 +4679,12 @@ public:
                 return object->is<ConstraintBase>();
             case DistanceConstraintBase::distancePropertyKey:
                 return object->is<DistanceConstraintBase>();
+            case FollowPathConstraintBase::distancePropertyKey:
+                return object->is<FollowPathConstraintBase>();
+            case ListFollowPathConstraintBase::distanceEndPropertyKey:
+                return object->is<ListFollowPathConstraintBase>();
+            case ListFollowPathConstraintBase::distanceOffsetPropertyKey:
+                return object->is<ListFollowPathConstraintBase>();
             case TransformComponentConstraintBase::copyFactorPropertyKey:
                 return object->is<TransformComponentConstraintBase>();
             case TransformComponentConstraintBase::minValuePropertyKey:
@@ -4588,8 +4697,6 @@ public:
                 return object->is<TransformComponentConstraintYBase>();
             case TransformComponentConstraintYBase::maxValueYPropertyKey:
                 return object->is<TransformComponentConstraintYBase>();
-            case FollowPathConstraintBase::distancePropertyKey:
-                return object->is<FollowPathConstraintBase>();
             case ScrollConstraintBase::scrollOffsetXPropertyKey:
                 return object->is<ScrollConstraintBase>();
             case ScrollConstraintBase::scrollOffsetYPropertyKey:
@@ -4599,6 +4706,8 @@ public:
             case ScrollConstraintBase::scrollPercentYPropertyKey:
                 return object->is<ScrollConstraintBase>();
             case ScrollConstraintBase::scrollIndexPropertyKey:
+                return object->is<ScrollConstraintBase>();
+            case ScrollConstraintBase::thresholdPropertyKey:
                 return object->is<ScrollConstraintBase>();
             case ElasticScrollPhysicsBase::frictionPropertyKey:
                 return object->is<ElasticScrollPhysicsBase>();
@@ -4994,12 +5103,12 @@ public:
                 return object->is<DrawableAssetBase>();
             case ExportAudioBase::volumePropertyKey:
                 return object->is<ExportAudioBase>();
+            case CustomPropertyTriggerBase::firePropertyKey:
+                return object->is<CustomPropertyTriggerBase>();
             case NestedTriggerBase::firePropertyKey:
                 return object->is<NestedTriggerBase>();
             case EventBase::triggerPropertyKey:
                 return object->is<EventBase>();
-            case CustomPropertyTriggerBase::firePropertyKey:
-                return object->is<CustomPropertyTriggerBase>();
         }
         return false;
     }

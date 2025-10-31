@@ -46,6 +46,16 @@ void DataBindContextValueAssetImage::apply(Core* target,
                 source->as<ViewModelInstanceAssetImage>()->asset());
         }
     }
+    else if (target->is<BindablePropertyAsset>())
+    {
+        auto source = m_dataBind->source();
+        target->as<BindablePropertyAsset>()->imageValue(
+            source->as<ViewModelInstanceAssetImage>()->asset()->renderImage());
+        CoreRegistry::setUint(
+            target,
+            propertyKey,
+            source->as<ViewModelInstanceAssetImage>()->propertyValue());
+    }
     else
     {
         auto source = m_dataBind->source();
@@ -54,18 +64,4 @@ void DataBindContextValueAssetImage::apply(Core* target,
             propertyKey,
             source->as<ViewModelInstanceAssetImage>()->propertyValue());
     }
-}
-
-bool DataBindContextValueAssetImage::syncTargetValue(Core* target,
-                                                     uint32_t propertyKey)
-{
-    auto value = CoreRegistry::getUint(target, propertyKey);
-
-    if (m_previousValue != value)
-    {
-        m_previousValue = value;
-        m_targetDataValue.value(value);
-        return true;
-    }
-    return false;
 }

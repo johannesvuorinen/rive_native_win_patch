@@ -1,3 +1,62 @@
+## 0.0.16
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+### Fixes
+
+- Fixes rendering issues on certain Android devices.
+
+### Build & Platform Updates
+
+- Bump minimum supported dependency for Flutter to `3.27.0` and Dart to `3.6.0`.
+
+## 0.0.15
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+### Fixes
+
+- Fixed [556](https://github.com/rive-app/rive-flutter/issues/556). `getTransformTo` can return a negative width and height scale resulting in a texture creation with a negative width/height.
+- Fixed [561](https://github.com/rive-app/rive-flutter/issues/561) Flutter web not initializing.
+
+## 0.0.14
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+### Fixes
+
+- Graphics memory leak on Android when using the Rive Renderer.
+
+## 0.0.13
+
+- Added multi-touch support
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+### Fixes
+
+- Fixed [544](https://github.com/rive-app/rive-flutter/issues/544), which resulted in settled graphics not being visible after backgrounding the app when using `Factory.rive`.
+- Fixed [529](https://github.com/rive-app/rive-flutter/issues/529), an assertion/crash on Windows debug builds when accessing `front()` on an empty vector.
+- Fixed an issue where graphics would not update after layout when using the Flutter renderer.
+
+### Build & Platform Updates
+
+- Included `pdb` symbol files for `rive_native` on Windows to assist in debuging native errors.
+
+## 0.0.12
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+- Reduced the number of texture allocations made when resizing widgets using `Factory.rive`, improving memory efficiency and performance.
+- Enhanced painting and texture creation behavior when resizing widgets or windows with `Factory.rive`, resulting in smoother widget resizing.
+- Better aligned the native and web implementations to ensure consistent behavior across all platforms.
+
+### Fixes
+
+- Resolved [issue #498](https://github.com/rive-app/rive-flutter/issues/498) where `Fit.scaleDown` was not working correctly with `Factory.rive`.
+- Resolved [an issue](https://community.rive.app/c/support/rive-native-rendering-visible-aliasing-jagged-edges) where upscaling Rive widget transforms resulted in blurry textures when using `Factory.rive`.
+- Fixed layout problems that occurred when certain `Fit` modes were used and the user switched to a different DPI screen.
+- Adds `addAdvanceRequestListener` to `StateMachine` and `ViewModelInstance`. This is used internally by the `rive` package to force advance on view model property change, and input changes.
+- Fixed instances where pointer exit was not working
+
 ## 0.0.11
 
 - Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.

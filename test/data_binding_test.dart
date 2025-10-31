@@ -125,6 +125,17 @@ void main() {
         returnsNormally);
     expect(() => stateMachine!.bindViewModelInstance(viewModelInstance!),
         returnsNormally);
+
+    // Request advance on view model instance should request advance on bound state machine
+    int requestAdvanceCount = 0;
+    void requestAdvanceCallback() {
+      requestAdvanceCount++;
+    }
+
+    stateMachine!.addAdvanceRequestListener(requestAdvanceCallback);
+    viewModelInstance!.requestAdvance();
+    expect(requestAdvanceCount, 1);
+    stateMachine.removeAdvanceRequestListener(requestAdvanceCallback);
   });
 
   test('view model properties are correct', () async {
@@ -177,8 +188,15 @@ void main() {
     var viewModelInstance = viewModel!.createInstanceByName('Gordon');
     expect(viewModelInstance, isNotNull);
 
+    int requestAdvanceCount = 0;
+    void requestAdvanceCallback() {
+      requestAdvanceCount++;
+    }
+
+    viewModelInstance!.addAdvanceRequestListener(requestAdvanceCallback);
+
     // view model instance name
-    expect(viewModelInstance!.name, "Gordon");
+    expect(viewModelInstance.name, "Gordon");
 
     // properties
     final properties = viewModel.properties;
@@ -189,6 +207,7 @@ void main() {
     expect(numberProperty, isNotNull);
     expect(numberProperty!.value, 30);
     numberProperty.value = 33;
+    expect(requestAdvanceCount, 1);
     expect(numberProperty.value, 33);
 
     // string
@@ -196,6 +215,7 @@ void main() {
     expect(stringProperty, isNotNull);
     expect(stringProperty!.value, "Gordon");
     stringProperty.value = "Peter";
+    expect(requestAdvanceCount, 2);
     expect(stringProperty.value, "Peter");
 
     // color
@@ -206,16 +226,19 @@ void main() {
     expect(color.green, 0);
     expect(color.blue, 0);
     colorProperty.value = const Color.fromARGB(143, 0, 255, 0);
+    expect(requestAdvanceCount, 3);
     color = colorProperty.value;
     expect(color.alpha, 143);
     expect(color.red, 0);
     expect(color.green, 255);
     expect(color.blue, 0);
     colorProperty.value = colorProperty.value.withAlpha(0);
+    expect(requestAdvanceCount, 4);
     color = colorProperty.value;
     expect(color.alpha, 0);
     const originalColor = Color.fromRGBO(255, 23, 79, 0.5123);
     colorProperty.value = originalColor;
+    expect(requestAdvanceCount, 5);
     expect(colorProperty.value.value, originalColor.value);
     expect(colorProperty.value.red, originalColor.red);
     expect(colorProperty.value.green, originalColor.green);
@@ -227,6 +250,7 @@ void main() {
     expect(booleanProperty, isNotNull);
     expect(booleanProperty!.value, false);
     booleanProperty.value = true;
+    expect(requestAdvanceCount, 6);
     expect(booleanProperty.value, true);
 
     // enum
@@ -234,8 +258,10 @@ void main() {
     expect(enumProperty, isNotNull);
     expect(enumProperty!.value, "dog");
     enumProperty.value = "cat";
+    expect(requestAdvanceCount, 7);
     expect(enumProperty.value, "cat");
     enumProperty.value = "snakeLizard"; // does not exist as a valid enum
+    expect(requestAdvanceCount, 8);
     expect(enumProperty.value, "cat",
         reason: 'should not change to invalid enum');
 
@@ -243,6 +269,7 @@ void main() {
     var triggerProperty = viewModelInstance.trigger('jump');
     expect(triggerProperty, isNotNull);
     triggerProperty!.trigger(); // expect this to not throw
+    expect(requestAdvanceCount, 9);
 
     // view model instance
     var viewModelProperty = viewModelInstance.viewModel('pet');
@@ -254,7 +281,10 @@ void main() {
     var petType = viewModelProperty.enumerator('type')!;
     expect(petType.value, "frog");
     petType.value = "chipmunk";
+    expect(requestAdvanceCount, 10);
     expect(petType.value, "chipmunk");
+
+    viewModelInstance.removeAdvanceRequestListener(requestAdvanceCallback);
   });
 
   test('view model instance value has changed and clear changes work',
@@ -507,8 +537,16 @@ void main() {
     expect(properties.length, 1);
     expect(properties[0].type, rive.DataType.list);
     final viewModelInstance = viewModel.createDefaultInstance();
+
+    int requestAdvanceCount = 0;
+    void requestAdvanceCallback() {
+      requestAdvanceCount++;
+    }
+
+    viewModelInstance!.addAdvanceRequestListener(requestAdvanceCallback);
+
     expect(viewModelInstance, isNotNull);
-    final list = viewModelInstance!.list('team');
+    final list = viewModelInstance.list('team');
     expect(list, isNotNull);
     expect(list!.length, 5);
     var instance0 = list.instanceAt(0);
@@ -527,15 +565,18 @@ void main() {
     final hernanPerson = viewModelPerson!.createInstance();
     hernanPerson!.string('name')!.value = 'Hernan';
     list.add(hernanPerson);
+    expect(requestAdvanceCount, 1);
     expect(list.length, 6);
     final instance5 = list.instanceAt(5);
     expect(instance5.string('name')!.value, 'Hernan');
 
     // remove instance
     list.remove(instance0);
+    expect(requestAdvanceCount, 2);
     expect(list.length, 5);
 
     list.removeAt(3);
+    expect(requestAdvanceCount, 3);
     expect(list.length, 4);
     instance3 = list.instanceAt(3);
     expect(instance3.string('name')!.value, 'Hernan');
@@ -543,18 +584,23 @@ void main() {
     // swap instances
     expect(() => list.swap(-1, 1), throwsRangeError,
         reason: "negative index should throw");
+    expect(requestAdvanceCount, 3, reason: "should not increment");
     expect(() => list.swap(1, -5), throwsRangeError,
         reason: "negative index should throw");
+    expect(requestAdvanceCount, 3, reason: "should not increment");
     list.swap(0, 1);
+    expect(requestAdvanceCount, 4);
     expect(list.instanceAt(0).string('name')!.value, 'Tod');
     expect(list.instanceAt(1).string('name')!.value, 'David');
     list.swap(0, 1);
+    expect(requestAdvanceCount, 5);
     expect(list.instanceAt(0).string('name')!.value, 'David');
     expect(list.instanceAt(1).string('name')!.value, 'Tod');
 
     // swap instances with invalid indices
     expect(() => list.swap(0, 100), throwsRangeError,
         reason: "out of range index should throw");
+    expect(requestAdvanceCount, 5, reason: "should not increment");
     expect(list.instanceAt(0).string('name')!.value, 'David');
     expect(list.instanceAt(1).string('name')!.value, 'Tod');
 
@@ -563,6 +609,7 @@ void main() {
 
     // add instance at valid index
     var result = list.insert(2, lancePerson);
+    expect(requestAdvanceCount, 6);
     expect(result, true);
     expect(list.length, 5);
     expect(list.instanceAt(2).string('name')!.value, 'Lance');
@@ -572,6 +619,7 @@ void main() {
 
     // add instance at valid index
     list[3] = philPerson;
+    expect(requestAdvanceCount, 7);
     expect(list[3].string('name')!.value, 'Phil');
 
     // instanceAt negative
@@ -585,17 +633,23 @@ void main() {
     // removeAt negative
     expect(() => list.removeAt(-1), throwsRangeError,
         reason: "negative index should throw");
+    expect(requestAdvanceCount, 7, reason: "should not increment");
 
     // removeAt out of range
     expect(() => list.removeAt(100), throwsRangeError,
         reason: "out of range index should throw");
+    expect(requestAdvanceCount, 7, reason: "should not increment");
 
     // insert negative
     expect(() => list.insert(-1, lancePerson), throwsRangeError,
         reason: "negative index should throw");
+    expect(requestAdvanceCount, 7, reason: "should not increment");
 
     // insert out of range
     expect(() => list.insert(100, lancePerson), throwsRangeError,
         reason: "out of range index should throw");
+    expect(requestAdvanceCount, 7, reason: "should not increment");
+
+    viewModelInstance.removeAdvanceRequestListener(requestAdvanceCallback);
   });
 }

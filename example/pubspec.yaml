@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  rive_native: 0.0.8 # We pin this version otherwise it $%^&# up the Dart analysis server
+  rive_native: 0.0.15 # We pin this version otherwise it $%^&# up the Dart analysis server
 
   cupertino_icons: ^1.0.8
   http: ^1.3.0

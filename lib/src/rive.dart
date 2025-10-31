@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'dart:ui' show Color;
+import 'dart:ui' show Color, VoidCallback;
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
@@ -305,7 +305,7 @@ abstract interface class ViewModel {
 ///
 /// Docs: https://rive.app/docs/runtimes/data-binding
 abstract interface class ViewModelInstance
-    implements ViewModelInstanceCallbacks {
+    implements ViewModelInstanceCallbacks, AdvanceRequestInterface {
   /// The name of the view model instance
   String get name;
 
@@ -562,6 +562,7 @@ mixin ViewModelInstanceObservableValueMixin<T>
   @mustCallSuper
   set value(T value) {
     nativeValue = value;
+    rootViewModelInstance.requestAdvance();
   }
 
   @override
@@ -893,6 +894,10 @@ abstract class Artboard {
   @useResult
   CallbackHandler onLayoutDirty(void Function() callback);
 
+  /// Callback for when a layout style of a nested artboard has changed.
+  @useResult
+  CallbackHandler onTransformDirty(void Function() callback);
+
   dynamic takeLayoutNode();
   void syncStyleChanges();
 
@@ -1080,11 +1085,31 @@ enum HitResult {
   hitOpaque,
 }
 
-abstract class StateMachine implements EventListenerInterface {
+abstract class StateMachine
+    implements EventListenerInterface, AdvanceRequestInterface {
+  ViewModelInstance? _boundRuntimeViewModelInstance;
+
   String get name;
   bool advance(double elapsedSeconds, bool newFrame);
   bool advanceAndApply(double elapsedSeconds);
-  void dispose();
+
+  @mustCallSuper
+  void dispose() {
+    _boundRuntimeViewModelInstance
+        ?.removeAdvanceRequestListener(requestAdvance);
+    removeAllAdvanceRequestListeners();
+  }
+
+  /// Returns a list of all inputs in the state machine.
+  List<Input> get inputs {
+    final inputs = <Input>[];
+    for (var i = 0;; i++) {
+      final input = inputAt(i);
+      if (input == null) break;
+      inputs.add(input);
+    }
+    return inputs;
+  }
 
   /// Retrieve a number input from the state machine with the given [name].
   /// Get/set the [NumberInput.value] of the input.
@@ -1136,10 +1161,10 @@ abstract class StateMachine implements EventListenerInterface {
   CallbackHandler onInputChanged(Function(int index) callback);
   bool get isDone;
   bool hitTest(Vec2D position);
-  HitResult pointerDown(Vec2D position);
-  HitResult pointerMove(Vec2D position, {double? timeStamp});
-  HitResult pointerUp(Vec2D position);
-  HitResult pointerExit(Vec2D position);
+  HitResult pointerDown(Vec2D position, {int pointerId = 0});
+  HitResult pointerMove(Vec2D position, {double? timeStamp, int pointerId = 0});
+  HitResult pointerUp(Vec2D position, {int pointerId = 0});
+  HitResult pointerExit(Vec2D position, {int pointerId = 0});
   HitResult dragStart(Vec2D position, {double? timeStamp});
   HitResult dragEnd(Vec2D position, {double? timeStamp});
 
@@ -1151,13 +1176,69 @@ abstract class StateMachine implements EventListenerInterface {
   /// Binds the provided [viewModelInstance] to the state machine
   ///
   /// Docs: https://rive.app/docs/runtimes/data-binding
-  void bindViewModelInstance(ViewModelInstance viewModelInstance);
+  @mustCallSuper
+  void bindViewModelInstance(ViewModelInstance viewModelInstance) {
+    _boundRuntimeViewModelInstance
+        ?.removeAdvanceRequestListener(requestAdvance);
+    _boundRuntimeViewModelInstance = viewModelInstance;
+    viewModelInstance.addAdvanceRequestListener(requestAdvance);
+  }
+
+  ViewModelInstance? get boundRuntimeViewModelInstance =>
+      _boundRuntimeViewModelInstance;
 
   /// This method is used internally and should not be called directly.
   /// Instead, use the [bindViewModelInstance] method.
   @internal
   void internalDataContext(InternalDataContext dataContext);
   List<Event> reportedEvents();
+}
+
+/// This interface is used internally to notify that something has changed that
+/// requires and advance/paint at a higher level.
+///
+/// Used by [ViewModelInstance] and [StateMachine].
+abstract interface class AdvanceRequestInterface {
+  void requestAdvance();
+
+  void addAdvanceRequestListener(VoidCallback callback);
+
+  void removeAdvanceRequestListener(VoidCallback callback);
+
+  void removeAllAdvanceRequestListeners();
+
+  @visibleForTesting
+  int get numberOfAdvanceRequestListeners;
+}
+
+/// Shared implementation of [AdvanceRequestInterface].
+mixin AdvanceRequestMixin implements AdvanceRequestInterface {
+  final _listeners = <VoidCallback>{};
+
+  @override
+  void requestAdvance() {
+    for (var listener in _listeners) {
+      listener();
+    }
+  }
+
+  @override
+  void addAdvanceRequestListener(VoidCallback callback) {
+    _listeners.add(callback);
+  }
+
+  @override
+  void removeAdvanceRequestListener(VoidCallback callback) {
+    _listeners.remove(callback);
+  }
+
+  @override
+  void removeAllAdvanceRequestListeners() {
+    _listeners.clear();
+  }
+
+  @override
+  int get numberOfAdvanceRequestListeners => _listeners.length;
 }
 
 abstract interface class EventListenerInterface {
@@ -1354,6 +1435,7 @@ abstract class CustomBooleanProperty extends CustomProperty<bool> {}
 abstract class CustomStringProperty extends CustomProperty<String> {}
 
 abstract class Input {
+  StateMachine get internalStateMachine;
   String get name;
   void dispose();
 }

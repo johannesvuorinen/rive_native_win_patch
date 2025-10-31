@@ -277,6 +277,8 @@ class WebRiveFile extends File {
       RiveWasm.deleteRiveFile.callAsFunction(null, pointer));
   int _pointer;
 
+  int get pointer => _pointer;
+
   static final _instances = <int, InternalViewModelInstanceValue?>{};
 
   @internal
@@ -600,7 +602,7 @@ class WebViewModelRuntime implements ViewModel {
 }
 
 class WebViewModelInstanceRuntime
-    with ViewModelInstanceCallbackMixin
+    with ViewModelInstanceCallbackMixin, AdvanceRequestMixin
     implements ViewModelInstance {
   int get pointer => _pointer;
   int _pointer;
@@ -752,6 +754,7 @@ class WebViewModelInstanceRuntime
   @override
   void dispose() {
     clearCallbacks();
+    removeAllAdvanceRequestListeners();
 
     if (_pointer == 0) {
       return;
@@ -942,6 +945,7 @@ class WebViewModelInstanceTriggerRuntime
 
   @override
   void trigger() {
+    _rootViewModelInstance.requestAdvance();
     RiveWasm.triggerVMITriggerRuntime.callAsFunction(null, pointer.toJS);
   }
 
@@ -968,6 +972,7 @@ class WebViewModelInstanceAssetImageRuntime
 
   @override
   set value(covariant WebRenderImage? value) {
+    _rootViewModelInstance.requestAdvance();
     RiveWasm.setVMIAssetImageRuntimeValue.callAsFunction(
       null,
       _pointer.toJS,
@@ -986,6 +991,7 @@ class WebViewModelInstanceArtboardRuntime
 
   @override
   set value(covariant WebBindableArtboard value) {
+    _rootViewModelInstance.requestAdvance();
     RiveWasm.setVMIArtboardRuntimeValue.callAsFunction(
       null,
       _pointer.toJS,
@@ -1008,14 +1014,18 @@ class WebViewModelInstanceListRuntime extends WebViewModelInstanceValueRuntime
           .toDartInt;
 
   @override
-  void add(covariant WebViewModelInstanceRuntime instance) =>
-      RiveWasm.vmiListRuntimeAddInstance
-          .callAsFunction(null, _pointer.toJS, instance.pointer.toJS);
+  void add(covariant WebViewModelInstanceRuntime instance) {
+    _rootViewModelInstance.requestAdvance();
+    RiveWasm.vmiListRuntimeAddInstance
+        .callAsFunction(null, _pointer.toJS, instance.pointer.toJS);
+  }
 
   @override
-  void remove(covariant WebViewModelInstanceRuntime instance) =>
-      RiveWasm.vmiListRuntimeRemoveInstance
-          .callAsFunction(null, _pointer.toJS, instance.pointer.toJS);
+  void remove(covariant WebViewModelInstanceRuntime instance) {
+    _rootViewModelInstance.requestAdvance();
+    RiveWasm.vmiListRuntimeRemoveInstance
+        .callAsFunction(null, _pointer.toJS, instance.pointer.toJS);
+  }
 
   @override
   bool insert(int index, covariant WebViewModelInstanceRuntime instance) {
@@ -1023,6 +1033,7 @@ class WebViewModelInstanceListRuntime extends WebViewModelInstanceValueRuntime
     if (index >= length) {
       throw RangeError.range(index, 0, length - 1, "index");
     }
+    _rootViewModelInstance.requestAdvance();
     return _wasmBool(RiveWasm.vmiListRuntimeAddInstanceAt.callAsFunction(
       null,
       _pointer.toJS,
@@ -1037,6 +1048,7 @@ class WebViewModelInstanceListRuntime extends WebViewModelInstanceValueRuntime
     if (index >= length) {
       throw RangeError.range(index, 0, length - 1, "index");
     }
+    _rootViewModelInstance.requestAdvance();
     RiveWasm.vmiListRuntimeRemoveInstanceAt
         .callAsFunction(null, _pointer.toJS, index.toJS);
   }
@@ -1069,6 +1081,7 @@ class WebViewModelInstanceListRuntime extends WebViewModelInstanceValueRuntime
     if (b >= length) {
       throw RangeError.range(b, 0, length - 1, "b");
     }
+    _rootViewModelInstance.requestAdvance();
     RiveWasm.vmiListRuntimeSwap
         .callAsFunction(null, _pointer.toJS, a.toJS, b.toJS);
   }
@@ -1469,6 +1482,16 @@ class WebRiveArtboard extends Artboard {
   }
 
   @override
+  CallbackHandler onTransformDirty(void Function() callback) {
+    RiveWasm.setArtboardTransformDirtyCallback.callAsFunction(
+      null,
+      _pointer.toJS,
+      callback.toJS,
+    );
+    return const EmptyCallbackHandler();
+  }
+
+  @override
   void syncStyleChanges() =>
       RiveWasm.artboardSyncStyleChanges.callAsFunction(null, _pointer.toJS);
 
@@ -1604,7 +1627,8 @@ class WebBindableArtboard extends BindableArtboard {
   }
 }
 
-class WebStateMachine extends StateMachine with EventListenerMixin {
+class WebStateMachine extends StateMachine
+    with EventListenerMixin, AdvanceRequestMixin {
   static final _finalizer = Finalizer(
     (js.JSAny pointer) =>
         RiveWasm.deleteStateMachineInstance.callAsFunction(null, pointer),
@@ -1612,8 +1636,6 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
 
   int get pointer => _pointer;
   int _pointer;
-
-  ViewModelInstance? _boundRuntimeViewModelInstance;
 
   WebStateMachine(this._pointer) {
     _finalizer.attach(this, _pointer.toJS, detach: this);
@@ -1647,12 +1669,13 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
         elapsedSeconds.toJS,
       ),
     );
-    _boundRuntimeViewModelInstance?.handleCallbacks();
+    boundRuntimeViewModelInstance?.handleCallbacks();
     return result;
   }
 
   @override
   void dispose() {
+    super.dispose();
     removeAllEventListeners();
     if (_pointer == 0) {
       return;
@@ -1695,21 +1718,21 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
   BooleanInput? boolean(String name, {String? path}) {
     final ptr =
         _inputWrapper(RiveWasm.stateMachineInstanceBoolean, name, path: path);
-    return ptr == 0 ? null : WebBooleanInput(ptr);
+    return ptr == 0 ? null : WebBooleanInput(ptr, this);
   }
 
   @override
   NumberInput? number(String name, {String? path}) {
     final ptr =
         _inputWrapper(RiveWasm.stateMachineInstanceNumber, name, path: path);
-    return ptr == 0 ? null : WebNumberInput(ptr);
+    return ptr == 0 ? null : WebNumberInput(ptr, this);
   }
 
   @override
   TriggerInput? trigger(String name, {String? path}) {
     final ptr =
         _inputWrapper(RiveWasm.stateMachineInstanceTrigger, name, path: path);
-    return ptr == 0 ? null : WebTriggerInput(ptr);
+    return ptr == 0 ? null : WebTriggerInput(ptr, this);
   }
 
   @override
@@ -1723,11 +1746,11 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
     switch (RiveWasm.stateMachineInputType
         .callAsFunction(null, inputPointer.toJS)) {
       case 56:
-        return WebNumberInput(inputPointer);
+        return WebNumberInput(inputPointer, this);
       case 58:
-        return WebTriggerInput(inputPointer);
+        return WebTriggerInput(inputPointer, this);
       case 59:
-        return WebBooleanInput(inputPointer);
+        return WebBooleanInput(inputPointer, this);
       default:
         return null;
     }
@@ -1742,34 +1765,45 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
       .callAsFunction(null, _pointer.toJS, position.x.toJS, position.y.toJS));
 
   @override
-  HitResult pointerDown(Vec2D position) =>
+  HitResult pointerDown(Vec2D position, {int pointerId = 0}) =>
       HitResult.values[(RiveWasm.stateMachineInstancePointerDown.callAsFunction(
-                  null, _pointer.toJS, position.x.toJS, position.y.toJS)
-              as js.JSNumber)
+              null,
+              _pointer.toJS,
+              position.x.toJS,
+              position.y.toJS,
+              pointerId.toJS) as js.JSNumber)
           .toDartInt];
 
   @override
-  HitResult pointerExit(Vec2D position) =>
+  HitResult pointerExit(Vec2D position, {int pointerId = 0}) =>
       HitResult.values[(RiveWasm.stateMachineInstancePointerExit.callAsFunction(
-                  null, _pointer.toJS, position.x.toJS, position.y.toJS)
-              as js.JSNumber)
+              null,
+              _pointer.toJS,
+              position.x.toJS,
+              position.y.toJS,
+              pointerId.toJS) as js.JSNumber)
           .toDartInt];
 
   @override
-  HitResult pointerMove(Vec2D position, {double? timeStamp}) =>
+  HitResult pointerMove(Vec2D position,
+          {double? timeStamp, int pointerId = 0}) =>
       HitResult.values[(RiveWasm.stateMachineInstancePointerMove.callAsFunction(
               null,
               _pointer.toJS,
               position.x.toJS,
               position.y.toJS,
-              (timeStamp ?? 0).toJS) as js.JSNumber)
+              (timeStamp ?? 0).toJS,
+              pointerId.toJS) as js.JSNumber)
           .toDartInt];
 
   @override
-  HitResult pointerUp(Vec2D position) =>
+  HitResult pointerUp(Vec2D position, {int pointerId = 0}) =>
       HitResult.values[(RiveWasm.stateMachineInstancePointerUp.callAsFunction(
-                  null, _pointer.toJS, position.x.toJS, position.y.toJS)
-              as js.JSNumber)
+              null,
+              _pointer.toJS,
+              position.x.toJS,
+              position.y.toJS,
+              pointerId.toJS) as js.JSNumber)
           .toDartInt];
 
   @override
@@ -1826,7 +1860,7 @@ class WebStateMachine extends StateMachine with EventListenerMixin {
   @override
   void bindViewModelInstance(
       covariant WebViewModelInstanceRuntime viewModelInstance) {
-    _boundRuntimeViewModelInstance = viewModelInstance;
+    super.bindViewModelInstance(viewModelInstance);
     RiveWasm.stateMachineSetVMIRuntime.callAsFunction(
       null,
       _pointer.toJS,
@@ -2086,10 +2120,12 @@ abstract class WebInput extends Input {
     (js.JSAny pointer) => RiveWasm.deleteInput.callAsFunction(null, pointer),
   );
 
+  final WebStateMachine _stateMachine;
+
   int get pointer => _pointer;
   int _pointer;
 
-  WebInput(this._pointer) {
+  WebInput(this._pointer, this._stateMachine) {
     _finalizer.attach(this, _pointer.toJS, detach: this);
   }
 
@@ -2113,10 +2149,13 @@ abstract class WebInput extends Input {
     }
     return RiveWasm.toDartString(stringPointer);
   }
+
+  @override
+  StateMachine get internalStateMachine => _stateMachine;
 }
 
 class WebNumberInput extends WebInput implements NumberInput {
-  WebNumberInput(super.pointer);
+  WebNumberInput(super.pointer, super._stateMachine);
 
   @override
   double get value =>
@@ -2125,27 +2164,34 @@ class WebNumberInput extends WebInput implements NumberInput {
           .toDartDouble;
 
   @override
-  set value(double value) =>
-      RiveWasm.setNumberValue.callAsFunction(null, pointer.toJS, value.toJS);
+  set value(double value) {
+    RiveWasm.setNumberValue.callAsFunction(null, pointer.toJS, value.toJS);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class WebTriggerInput extends WebInput implements TriggerInput {
-  WebTriggerInput(super.pointer);
+  WebTriggerInput(super.pointer, super._stateMachine);
 
   @override
-  void fire() => RiveWasm.fireTrigger.callAsFunction(null, pointer.toJS);
+  void fire() {
+    RiveWasm.fireTrigger.callAsFunction(null, pointer.toJS);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class WebBooleanInput extends WebInput implements BooleanInput {
-  WebBooleanInput(super.pointer);
+  WebBooleanInput(super.pointer, super._stateMachine);
 
   @override
   bool get value =>
       _wasmBool(RiveWasm.getBooleanValue.callAsFunction(null, pointer.toJS));
 
   @override
-  set value(bool value) =>
-      RiveWasm.setBooleanValue.callAsFunction(null, pointer.toJS, value.toJS);
+  set value(bool value) {
+    RiveWasm.setBooleanValue.callAsFunction(null, pointer.toJS, value.toJS);
+    internalStateMachine.requestAdvance();
+  }
 }
 
 class WebComponent extends Component {

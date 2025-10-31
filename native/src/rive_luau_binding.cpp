@@ -78,6 +78,20 @@ public:
         m_consoleHasDataCallback(consoleHasDataCallback)
     {}
 
+    int pCall(lua_State* state, int nargs, int nresults) override
+    {
+        // calculate stack position for message handler
+        int hpos = lua_gettop(state) - nargs;
+        lua_pushcfunction(state, riveErrorHandler, "riveErrorHandler");
+        lua_insert(state, hpos);
+
+        startTimedExecution(state);
+        int ret = lua_pcall(state, nargs, nresults, hpos);
+        endTimedExecution(state);
+        lua_remove(state, hpos);
+        return ret;
+    }
+
     void printError(lua_State* state) override
     {
         const char* error = lua_tostring(state, -1);
@@ -338,16 +352,7 @@ EXPORT int riveLuaPCall(lua_State* state, int nargs, int nresults)
     DartExposedScriptingContext* context =
         static_cast<DartExposedScriptingContext*>(lua_getthreaddata(state));
 
-    // calculate stack position for message handler
-    int hpos = lua_gettop(state) - nargs;
-    lua_pushcfunction(state, riveErrorHandler, "riveErrorHandler");
-    lua_insert(state, hpos);
-
-    context->startTimedExecution(state);
-    int ret = lua_pcall(state, nargs, nresults, hpos);
-    context->endTimedExecution(state);
-    lua_remove(state, hpos);
-    return ret;
+    return context->pCall(state, nargs, nresults);
 }
 
 EXPORT void riveLuaPushArtboard(lua_State* state,
@@ -370,6 +375,110 @@ EXPORT ScriptedRenderer* riveLuaPushRenderer(lua_State* state,
         return nullptr;
     }
     return lua_newrive<ScriptedRenderer>(state, renderer);
+}
+
+EXPORT ScriptedDataValue* riveLuaDataValue(lua_State* state, int index)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto scriptedDataValue = (ScriptedDataValue*)lua_touserdata(state, index);
+    return scriptedDataValue;
+}
+
+EXPORT ScriptedDataValueNumber* riveLuaPushDataValueNumber(lua_State* state,
+                                                           float value)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+
+    return lua_newrive<ScriptedDataValueNumber>(state, state, value);
+}
+
+EXPORT ScriptedDataValueString* riveLuaPushDataValueString(lua_State* state,
+                                                           const char* value)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+
+    return lua_newrive<ScriptedDataValueString>(state, state, value);
+}
+
+EXPORT ScriptedDataValueBoolean* riveLuaPushDataValueBoolean(lua_State* state,
+                                                             bool value)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+
+    return lua_newrive<ScriptedDataValueBoolean>(state, state, value);
+}
+
+EXPORT const char* riveLuaScriptedDataValueType(
+    ScriptedDataValue* scriptedDataValue)
+{
+    if (scriptedDataValue == nullptr)
+    {
+        return "";
+    }
+    if (scriptedDataValue->isNumber())
+    {
+        return "DataValueNumber";
+    }
+    if (scriptedDataValue->isString())
+    {
+        return "DataValueString";
+    }
+    if (scriptedDataValue->isBoolean())
+    {
+        return "DataValueBoolean";
+    }
+    return "";
+}
+
+EXPORT const float riveLuaScriptedDataValueNumberValue(
+    ScriptedDataValue* scriptedDataValue)
+{
+    if (scriptedDataValue != nullptr &&
+        scriptedDataValue->dataValue() != nullptr &&
+        scriptedDataValue->dataValue()->is<DataValueNumber>())
+    {
+        return scriptedDataValue->dataValue()->as<DataValueNumber>()->value();
+    }
+    return 0;
+}
+
+EXPORT const char* riveLuaScriptedDataValueStringValue(
+    ScriptedDataValue* scriptedDataValue)
+{
+    if (scriptedDataValue != nullptr &&
+        scriptedDataValue->dataValue() != nullptr &&
+        scriptedDataValue->dataValue()->is<DataValueString>())
+    {
+        return scriptedDataValue->dataValue()
+            ->as<DataValueString>()
+            ->value()
+            .c_str();
+    }
+    return "";
+}
+
+EXPORT bool riveLuaScriptedDataValueBooleanValue(
+    ScriptedDataValue* scriptedDataValue)
+{
+    if (scriptedDataValue != nullptr &&
+        scriptedDataValue->dataValue() != nullptr &&
+        scriptedDataValue->dataValue()->is<DataValueBoolean>())
+    {
+        return scriptedDataValue->dataValue()->as<DataValueBoolean>()->value();
+    }
+    return false;
 }
 
 EXPORT void riveLuaPushViewModelInstanceValue(
@@ -458,6 +567,16 @@ EXPORT void riveStackDump(lua_State* state)
     }
     fprintf(stderr, "\n"); /* end the listing */
 }
+
+EXPORT void setScriptingVM(lua_State* state, File* file)
+{
+    if (state == nullptr || file == nullptr)
+    {
+        return;
+    }
+    file->scriptingVM(new LuaState(state));
+}
+
 #ifdef __EMSCRIPTEN__
 
 static int lua_callback(lua_State* L)

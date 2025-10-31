@@ -183,7 +183,12 @@ if [[ $machine = "windows" ]]; then
     EXTRA_OUT=_shared
 fi
 
-RIVE_NATIVE_PREMAKE_COMMANDS="--with_rive_scripting --with_rive_text --with_rive_tools --with_rive_layout --with_rive_audio=$RIVE_AUDIO $CONFIG --variant=$VARIANT $COMPAT $KIND $FLUTTER_RUNTIME $NO_LTO $CROSS_COMPILE_OS"
+if [[ $FLUTTER_RUNTIME = "" ]]; then
+    SCRIPTING_FLAG="--with_rive_scripting"
+else
+    SCRIPTING_FLAG=""
+fi
+RIVE_NATIVE_PREMAKE_COMMANDS="$SCRIPTING_FLAG --with_rive_text --with_rive_tools --with_rive_layout --with_rive_audio=$RIVE_AUDIO $CONFIG --variant=$VARIANT $COMPAT $KIND $FLUTTER_RUNTIME $NO_LTO $CROSS_COMPILE_OS"
 
 make_rive_native_plugin() {
     local BUILD_OS=$1
@@ -382,7 +387,12 @@ elif [[ $machine = "windows" ]]; then
         USE_DEFAULT_RUNTIME="--windows_runtime=dynamic"
     fi
     export RIVE_OUT=$(out_dir windows x64)
-    $RUNTIME_PATH/build_rive.sh $ACTUAL_CONFIG x64 $FLUTTER_RUNTIME --variant=$VARIANT $USE_DEFAULT_RUNTIME --with_rive_tools --with_rive_scripting --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO --config=$ACTUAL_CONFIG --out=$(out_dir windows x64) --shared
+    if [[ $FLUTTER_RUNTIME = "" ]]; then
+        SCRIPTING_FLAG_WIN="--with_rive_scripting"
+    else
+        SCRIPTING_FLAG_WIN=""
+    fi
+    $RUNTIME_PATH/build_rive.sh $ACTUAL_CONFIG x64 $FLUTTER_RUNTIME --variant=$VARIANT $USE_DEFAULT_RUNTIME $SCRIPTING_FLAG_WIN --with_rive_tools --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO --config=$ACTUAL_CONFIG --out=$(out_dir windows x64) --shared
     pushd $(out_dir windows x64)
     msbuild.exe rive.sln -m:$NUMBER_OF_PROCESSORS
     popd
@@ -392,6 +402,7 @@ elif [[ $machine = "windows" ]]; then
     mkdir -p $COPY_TO
     cp -R $(out_dir windows x64)/rive_native.lib $COPY_TO
     cp -R $(out_dir windows x64)/*.dll $COPY_TO
+    cp -R $(out_dir windows x64)/*.pdb $COPY_TO
 
     du -hs $COPY_TO/rive_native.lib
 

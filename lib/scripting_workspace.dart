@@ -358,15 +358,15 @@ class ImplementedTypeProperty {
 class ImplementedType {
   final String scriptName;
   final String interfaceTypeName;
-  final String userTypeName;
   final List<ImplementedTypeProperty> inputs;
   final List<ImplementedTypeProperty> outputs;
+  final List<String> userTypeNames;
   ImplementedType({
     required this.scriptName,
     required this.interfaceTypeName,
-    required this.userTypeName,
     required this.inputs,
     required this.outputs,
+    required this.userTypeNames,
   });
 
   static ImplementedType? read(BinaryReader reader) {
@@ -381,7 +381,14 @@ class ImplementedType {
     if (reader.isEOF) {
       return null;
     }
-    final userTypeName = reader.readString();
+
+    final userTypesNames = <String>[];
+    final userTypesCount = reader.readVarUint();
+    for (int i = 0; i < userTypesCount; i++) {
+      final userTypeName = reader.readString();
+      userTypesNames.add(userTypeName);
+    }
+
     if (reader.isEOF) {
       return null;
     }
@@ -407,12 +414,11 @@ class ImplementedType {
     }
 
     return ImplementedType(
-      scriptName: scriptName,
-      interfaceTypeName: interfaceName,
-      userTypeName: userTypeName,
-      inputs: inputs,
-      outputs: outputs,
-    );
+        scriptName: scriptName,
+        interfaceTypeName: interfaceName,
+        inputs: inputs,
+        outputs: outputs,
+        userTypeNames: userTypesNames);
   }
 }
 
@@ -652,4 +658,6 @@ abstract class ScriptingWorkspace {
     }
     completer.complete(CompileResult.read(reader));
   }
+
+  String get builtinDefinitions;
 }

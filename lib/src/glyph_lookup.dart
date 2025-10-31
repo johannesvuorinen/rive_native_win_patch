@@ -3,8 +3,9 @@ import 'package:rive_native/rive_text.dart';
 // Anything less than ASCII 32 (space) we can consider to be an empty glyph.
 // 0x2028 is a line separator without making a paragraph (like on web).
 // https://stackoverflow.com/questions/3072152/what-is-unicode-character-2028-ls-line-separator-used-for
+// 0x200B is a Zero width space.
 bool isWhiteSpace(int c) {
-  return c <= 32 || c == 0x2028;
+  return c <= 32 || c == 0x2028 || c == 0x200B;
 }
 
 /// Stores the glyphId/Index representing the unicode point at i.

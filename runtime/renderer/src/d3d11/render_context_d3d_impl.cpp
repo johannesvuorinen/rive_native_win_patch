@@ -9,20 +9,8 @@
 #include "rive/renderer/texture.hpp"
 
 #include <D3DCompiler.h>
-#include <sstream>
 
-#include "generated/shaders/advanced_blend.glsl.hpp"
-#include "generated/shaders/atomic_draw.glsl.hpp"
-#include "generated/shaders/color_ramp.glsl.hpp"
-#include "generated/shaders/constants.glsl.hpp"
-#include "generated/shaders/common.glsl.hpp"
-#include "generated/shaders/draw_image_mesh.glsl.hpp"
-#include "generated/shaders/draw_path_common.glsl.hpp"
-#include "generated/shaders/draw_path.glsl.hpp"
-#include "generated/shaders/hlsl.glsl.hpp"
-#include "generated/shaders/bezier_utils.glsl.hpp"
-#include "generated/shaders/render_atlas.glsl.hpp"
-#include "generated/shaders/tessellate.glsl.hpp"
+#include "generated/shaders/tessellate.glsl.exports.h"
 
 // offline shaders
 namespace shader
@@ -249,13 +237,12 @@ bool D3D11PipelineManager::setPipelineState(
 
     m_context->IASetInputLayout(pipeline->m_vertexShader.layout.Get());
     m_context->VSSetShader(pipeline->m_vertexShader.shader.Get(), nullptr, 0);
-    m_context->PSSetShader(pipeline->m_pixelShader.Get(), nullptr, 0);
+    m_context->PSSetShader(pipeline->m_pixelShader.shader.Get(), nullptr, 0);
     return true;
 }
 
-D3D11DrawVertexShader D3D11PipelineManager ::compileVertexShaderBlobToFinalType(
-    DrawType drawType,
-    ComPtr<ID3DBlob> blob)
+std::unique_ptr<D3D11DrawVertexShader> D3D11PipelineManager::
+    compileVertexShaderBlobToFinalType(DrawType drawType, ComPtr<ID3DBlob> blob)
 {
     D3D11_INPUT_ELEMENT_DESC layoutDesc[2];
     uint32_t vertexAttribCount;
@@ -318,10 +305,9 @@ D3D11DrawVertexShader D3D11PipelineManager ::compileVertexShaderBlobToFinalType(
                              0};
             vertexAttribCount = 2;
             break;
-        case DrawType::atomicResolve:
+        case DrawType::renderPassResolve:
             vertexAttribCount = 0;
             break;
-        case DrawType::atomicInitialize:
         case DrawType::msaaStrokes:
         case DrawType::msaaMidpointFanBorrowedCoverage:
         case DrawType::msaaMidpointFans:
@@ -330,43 +316,44 @@ D3D11DrawVertexShader D3D11PipelineManager ::compileVertexShaderBlobToFinalType(
         case DrawType::msaaMidpointFanPathsCover:
         case DrawType::msaaOuterCubics:
         case DrawType::msaaStencilClipReset:
+        case DrawType::renderPassInitialize:
             RIVE_UNREACHABLE();
     }
 
-    D3D11DrawVertexShader result;
+    auto result = std::make_unique<D3D11DrawVertexShader>();
 
     VERIFY_OK(device()->CreateInputLayout(layoutDesc,
                                           vertexAttribCount,
                                           blob->GetBufferPointer(),
                                           blob->GetBufferSize(),
-                                          &result.layout));
+                                          &result->layout));
     VERIFY_OK(device()->CreateVertexShader(blob->GetBufferPointer(),
                                            blob->GetBufferSize(),
                                            nullptr,
-                                           &result.shader));
+                                           &result->shader));
     return result;
 }
 
-ComPtr<ID3D11PixelShader> D3D11PipelineManager ::
+std::unique_ptr<D3D11DrawPixelShader> D3D11PipelineManager ::
     compilePixelShaderBlobToFinalType(ComPtr<ID3DBlob> blob)
 {
-    ComPtr<ID3D11PixelShader> pixelShaderResult;
+    auto result = std::make_unique<D3D11DrawPixelShader>();
 
     VERIFY_OK(device()->CreatePixelShader(blob->GetBufferPointer(),
                                           blob->GetBufferSize(),
                                           nullptr,
-                                          &pixelShaderResult));
+                                          &result->shader));
 
-    return pixelShaderResult;
+    return result;
 }
 
-D3D11DrawPipeline D3D11PipelineManager::linkPipeline(
+std::unique_ptr<D3D11DrawPipeline> D3D11PipelineManager::linkPipeline(
     const PipelineProps& props,
-    D3D11DrawVertexShader&& vs,
-    ComPtr<ID3D11PixelShader>&& ps)
+    const D3D11DrawVertexShader& vs,
+    const D3D11DrawPixelShader& ps)
 {
     // For D3D11 this just puts the vs and ps into a single structure together.
-    D3D11DrawPipeline pipeline;
+    auto pipeline = std::make_unique<D3D11DrawPipeline>();
 #ifdef WITH_RIVE_TOOLS
     if (props.synthesizedFailureType ==
             SynthesizedFailureType::pipelineCreation ||
@@ -380,8 +367,8 @@ D3D11DrawPipeline D3D11PipelineManager::linkPipeline(
     std::ignore = props;
 #endif
 
-    pipeline.m_vertexShader = std::move(vs);
-    pipeline.m_pixelShader = std::move(ps);
+    pipeline->m_vertexShader = vs;
+    pipeline->m_pixelShader = ps;
     return pipeline;
 }
 
@@ -389,10 +376,10 @@ static D3D11_FILTER filter_for_sampler_filter_options(ImageFilter option)
 {
     switch (option)
     {
-        case ImageFilter::trilinear:
-            return D3D11_FILTER::D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         case ImageFilter::nearest:
             return D3D11_FILTER::D3D11_FILTER_MIN_MAG_MIP_POINT;
+        case ImageFilter::bilinear:
+            return D3D11_FILTER::D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
     }
 
     RIVE_UNREACHABLE();
@@ -494,7 +481,7 @@ std::unique_ptr<RenderContext> RenderContextD3DImpl::MakeContext(
         new RenderContextD3DImpl(std::move(gpu),
                                  std::move(gpuContext),
                                  d3dCapabilities,
-                                 contextOptions.shaderCompilationMode));
+                                 contextOptions));
     return std::make_unique<RenderContext>(std::move(renderContextImpl));
 }
 
@@ -502,17 +489,20 @@ RenderContextD3DImpl::RenderContextD3DImpl(
     ComPtr<ID3D11Device> gpu,
     ComPtr<ID3D11DeviceContext> gpuContext,
     const D3DCapabilities& d3dCapabilities,
-    ShaderCompilationMode shaderCompilationMode) :
-    m_pipelineManager(gpuContext, gpu, d3dCapabilities, shaderCompilationMode),
+    const D3DContextOptions& d3dContextOptions) :
+    m_pipelineManager(gpuContext,
+                      gpu,
+                      d3dCapabilities,
+                      d3dContextOptions.shaderCompilationMode),
     m_d3dCapabilities(d3dCapabilities),
     m_gpu(std::move(gpu)),
     m_gpuContext(std::move(gpuContext))
 {
     m_platformFeatures.clipSpaceBottomUp = true;
     m_platformFeatures.framebufferBottomUp = false;
-    m_platformFeatures.supportsRasterOrdering =
+    m_platformFeatures.supportsRasterOrderingMode =
         d3dCapabilities.supportsRasterizerOrderedViews;
-    m_platformFeatures.supportsFragmentShaderAtomics = true;
+    m_platformFeatures.supportsAtomicMode = true;
     m_platformFeatures.maxTextureSize = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 
     // Create a default raster state for path and offscreen draws.
@@ -690,9 +680,9 @@ RenderContextD3DImpl::RenderContextD3DImpl(
         mipmapSamplerDesc.AddressV =
             address_mode_for_sampler_filter_options(yWrap);
         mipmapSamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        mipmapSamplerDesc.MipLODBias = 0.0f;
         mipmapSamplerDesc.MaxAnisotropy = 1;
         mipmapSamplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        mipmapSamplerDesc.MipLODBias = 0.0f;
         mipmapSamplerDesc.MinLOD = 0;
         mipmapSamplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
         VERIFY_OK(m_gpu->CreateSamplerState(
@@ -1721,7 +1711,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
     switch (desc.colorLoadAction)
     {
         case gpu::LoadAction::clear:
-            if (desc.atomicFixedFunctionColorOutput)
+            if (desc.fixedFunctionColorOutput)
             {
                 float clearColor4f[4];
                 UnpackColorToRGBA32FPremul(desc.colorClearValue, clearColor4f);
@@ -1746,7 +1736,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
             }
             break;
         case gpu::LoadAction::preserveRenderTarget:
-            if (!desc.atomicFixedFunctionColorOutput &&
+            if (!desc.fixedFunctionColorOutput &&
                 !renderTarget->targetTextureSupportsUAV())
             {
                 // We're rendering to an offscreen UAV and preserving the
@@ -1774,9 +1764,9 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
 
     // Execute the DrawList.
     ID3D11RenderTargetView* targetRTV =
-        desc.atomicFixedFunctionColorOutput ? renderTarget->targetRTV() : NULL;
+        desc.fixedFunctionColorOutput ? renderTarget->targetRTV() : NULL;
     ID3D11UnorderedAccessView* plsUAVs[] = {
-        desc.atomicFixedFunctionColorOutput ? NULL : renderTarget->targetUAV(),
+        desc.fixedFunctionColorOutput ? NULL : renderTarget->targetUAV(),
         renderTarget->clipUAV(),
         desc.interlockMode == gpu::InterlockMode::rasterOrdering
             ? renderTarget->scratchColorUAV()
@@ -1788,16 +1778,16 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
     static_assert(SCRATCH_COLOR_PLANE_IDX == 2);
     static_assert(COVERAGE_PLANE_IDX == 3);
     m_gpuContext->OMSetRenderTargetsAndUnorderedAccessViews(
-        desc.atomicFixedFunctionColorOutput ? 1 : 0,
+        desc.fixedFunctionColorOutput ? 1 : 0,
         &targetRTV,
         NULL,
-        desc.atomicFixedFunctionColorOutput ? 1 : 0,
-        desc.atomicFixedFunctionColorOutput ? std::size(plsUAVs) - 1
-                                            : std::size(plsUAVs),
-        desc.atomicFixedFunctionColorOutput ? plsUAVs + 1 : plsUAVs,
+        desc.fixedFunctionColorOutput ? 1 : 0,
+        desc.fixedFunctionColorOutput ? std::size(plsUAVs) - 1
+                                      : std::size(plsUAVs),
+        desc.fixedFunctionColorOutput ? plsUAVs + 1 : plsUAVs,
         NULL);
 
-    if (desc.atomicFixedFunctionColorOutput)
+    if (desc.fixedFunctionColorOutput)
     {
         // When rendering directly to the target RTV, we use the built-in blend
         // hardware for opacity and antialiasing.
@@ -1829,7 +1819,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
 
     bool renderPassHasCoalescedResolveAndTransfer =
         desc.interlockMode == gpu::InterlockMode::atomics &&
-        !desc.atomicFixedFunctionColorOutput &&
+        !desc.fixedFunctionColorOutput &&
         !renderTarget->targetTextureSupportsUAV();
 
     for (const DrawBatch& batch : *desc.drawList)
@@ -1840,13 +1830,14 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
                                   ? desc.combinedShaderFeatures
                                   : batch.shaderFeatures;
         auto shaderMiscFlags = batch.shaderMiscFlags;
-        if (drawType == gpu::DrawType::atomicResolve &&
+        if (drawType == gpu::DrawType::renderPassResolve &&
             renderPassHasCoalescedResolveAndTransfer)
         {
+            assert(desc.interlockMode == gpu::InterlockMode::atomics);
             shaderMiscFlags |=
                 gpu::ShaderMiscFlags::coalescedResolveAndTransfer;
         }
-        if (desc.atomicFixedFunctionColorOutput)
+        if (desc.fixedFunctionColorOutput)
         {
             shaderMiscFlags |= gpu::ShaderMiscFlags::fixedFunctionColorOutput;
         }
@@ -1989,7 +1980,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
                                           0);
                 break;
             }
-            case DrawType::atomicResolve:
+            case DrawType::renderPassResolve:
                 assert(desc.interlockMode == gpu::InterlockMode::atomics);
                 m_gpuContext->IASetPrimitiveTopology(
                     D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -2001,7 +1992,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
                     // render pass. (And ince we're changing the render target,
                     // this also better be the final batch of the render pass.)
                     assert(&batch == &desc.drawList->tail());
-                    assert(!desc.atomicFixedFunctionColorOutput);
+                    assert(!desc.fixedFunctionColorOutput);
                     assert(!renderTarget->targetTextureSupportsUAV());
                     ID3D11RenderTargetView* resolveRTV =
                         renderTarget->targetRTV();
@@ -2029,7 +2020,6 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
                 }
                 m_gpuContext->Draw(4, 0);
                 break;
-            case DrawType::atomicInitialize:
             case DrawType::msaaStrokes:
             case DrawType::msaaMidpointFanBorrowedCoverage:
             case DrawType::msaaMidpointFans:
@@ -2038,6 +2028,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
             case DrawType::msaaMidpointFanPathsCover:
             case DrawType::msaaOuterCubics:
             case DrawType::msaaStencilClipReset:
+            case DrawType::renderPassInitialize:
                 RIVE_UNREACHABLE();
         }
     }
@@ -2047,7 +2038,7 @@ void RenderContextD3DImpl::flush(const FlushDescriptor& desc)
     {
         // We rendered to an offscreen UAV and did not resolve to the
         // renderTarget. Copy back to the main target.
-        assert(!desc.atomicFixedFunctionColorOutput);
+        assert(!desc.fixedFunctionColorOutput);
         assert(!renderPassHasCoalescedResolveAndTransfer);
         blit_sub_rect(m_gpuContext.Get(),
                       renderTarget->targetTexture(),

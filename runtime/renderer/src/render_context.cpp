@@ -213,6 +213,7 @@ void RenderContext::LogicalFlush::rewind()
                             std::numeric_limits<int32_t>::max(),
                             std::numeric_limits<int32_t>::min(),
                             std::numeric_limits<int32_t>::min()};
+    m_combinedDrawContents = gpu::DrawContents::none;
 
     m_pathPaddingCount = 0;
     m_paintPaddingCount = 0;
@@ -277,6 +278,42 @@ void RenderContext::LogicalFlush::resetContainers()
     // usecases where it isn't used at all.
 }
 
+static gpu::InterlockMode select_interlock_mode(
+    const RenderContext::FrameDescriptor& frameDescriptor,
+    const gpu::PlatformFeatures& platformFeatures)
+{
+    if (frameDescriptor.msaaSampleCount != 0)
+    {
+        return gpu::InterlockMode::msaa;
+    }
+    if (frameDescriptor.clockwiseFillOverride)
+    {
+        if (platformFeatures.supportsClockwiseMode &&
+            !frameDescriptor.disableRasterOrdering)
+        {
+            return gpu::InterlockMode::clockwise;
+        }
+        if (platformFeatures.supportsClockwiseAtomicMode)
+        {
+            return gpu::InterlockMode::clockwiseAtomic;
+        }
+    }
+    if (platformFeatures.supportsRasterOrderingMode &&
+        (!frameDescriptor.disableRasterOrdering ||
+         // Only respect "disableRasterOrdering" if we have atomic mode to fall
+         // back on.
+         // FIXME: This API can be improved.
+         !platformFeatures.supportsAtomicMode))
+    {
+        return gpu::InterlockMode::rasterOrdering;
+    }
+    if (platformFeatures.supportsAtomicMode)
+    {
+        return gpu::InterlockMode::atomics;
+    }
+    return gpu::InterlockMode::msaa;
+}
+
 void RenderContext::beginFrame(const FrameDescriptor& frameDescriptor)
 {
     RIVE_PROF_SCOPE()
@@ -286,36 +323,13 @@ void RenderContext::beginFrame(const FrameDescriptor& frameDescriptor)
     assert(frameDescriptor.renderTargetWidth > 0);
     assert(frameDescriptor.renderTargetHeight > 0);
     m_frameDescriptor = frameDescriptor;
-    if (!platformFeatures().supportsRasterOrdering &&
-        !platformFeatures().supportsFragmentShaderAtomics)
+    m_frameInterlockMode =
+        select_interlock_mode(m_frameDescriptor, platformFeatures());
+    if (m_frameInterlockMode == gpu::InterlockMode::msaa &&
+        m_frameDescriptor.msaaSampleCount == 0)
     {
-        // We don't have pixel local storage in any form. Use 4x MSAA if
-        // msaaSampleCount wasn't already specified.
-        m_frameDescriptor.msaaSampleCount =
-            m_frameDescriptor.msaaSampleCount > 0
-                ? m_frameDescriptor.msaaSampleCount
-                : 4;
-    }
-    if (m_frameDescriptor.msaaSampleCount > 0)
-    {
-        m_frameInterlockMode = gpu::InterlockMode::msaa;
-    }
-    else if (platformFeatures().supportsRasterOrdering &&
-             (!m_frameDescriptor.disableRasterOrdering ||
-              !platformFeatures().supportsFragmentShaderAtomics))
-    {
-        m_frameInterlockMode = gpu::InterlockMode::rasterOrdering;
-    }
-    else if (frameDescriptor.clockwiseFillOverride &&
-             platformFeatures().supportsClockwiseAtomicRendering)
-    {
-        assert(platformFeatures().supportsFragmentShaderAtomics);
-        m_frameInterlockMode = gpu::InterlockMode::clockwiseAtomic;
-    }
-    else
-    {
-        assert(platformFeatures().supportsFragmentShaderAtomics);
-        m_frameInterlockMode = gpu::InterlockMode::atomics;
+        // Use 4x MSAA if msaaSampleCount wasn't already specified.
+        m_frameDescriptor.msaaSampleCount = 4;
     }
     m_frameShaderFeaturesMask =
         gpu::ShaderFeaturesMaskFor(m_frameInterlockMode);
@@ -399,6 +413,7 @@ bool RenderContext::LogicalFlush::pushDraws(DrawUniquePtr draws[],
     RIVE_PROF_SCOPE()
     assert(!m_hasDoneLayout);
 
+    PUSH_DISABLE_CLANG_SIMD_ABI_WARNING()
     auto countsVector = m_resourceCounts.toVec();
     for (size_t i = 0; i < drawCount; ++i)
     {
@@ -407,6 +422,7 @@ bool RenderContext::LogicalFlush::pushDraws(DrawUniquePtr draws[],
                draws[i]->clipRectInverseMatrix() == nullptr);
         countsVector += draws[i]->resourceCounts().toVec();
     }
+    POP_DISABLE_CLANG_SIMD_ABI_WARNING()
     Draw::ResourceCounters countsWithNewBatch = countsVector;
 
     // Textures and buffers have hard size limits. If the new batch doesn't fit
@@ -461,6 +477,7 @@ bool RenderContext::LogicalFlush::pushDraws(DrawUniquePtr draws[],
         m_draws.push_back(std::move(draws[i]));
         m_combinedDrawBounds =
             m_combinedDrawBounds.join(m_draws.back()->pixelBounds());
+        m_combinedDrawContents |= m_draws.back()->drawContents();
     }
 
     m_resourceCounts = countsWithNewBatch;
@@ -667,31 +684,46 @@ void RenderContext::flush(const FlushResources& flushResources)
 
     // Determine the minimum required resource allocation sizes to service this
     // flush.
-    ResourceAllocationCounts resourceRequirements;
-    resourceRequirements.flushUniformBufferCount = m_logicalFlushes.size();
-    resourceRequirements.imageDrawUniformBufferCount =
-        totalFrameResourceCounts.imageDrawCount;
-    resourceRequirements.pathBufferCount =
-        totalFrameResourceCounts.pathCount + layoutCounts.pathPaddingCount;
-    resourceRequirements.paintBufferCount =
-        totalFrameResourceCounts.pathCount + layoutCounts.paintPaddingCount;
-    resourceRequirements.paintAuxBufferCount =
-        totalFrameResourceCounts.pathCount + layoutCounts.paintAuxPaddingCount;
-    resourceRequirements.contourBufferCount =
-        totalFrameResourceCounts.contourCount +
-        layoutCounts.contourPaddingCount;
-    resourceRequirements.gradSpanBufferCount =
-        layoutCounts.gradSpanCount + layoutCounts.gradSpanPaddingCount;
-    resourceRequirements.tessSpanBufferCount =
-        totalFrameResourceCounts.maxTessellatedSegmentCount;
-    resourceRequirements.triangleVertexBufferCount =
-        totalFrameResourceCounts.maxTriangleVertexCount;
-    resourceRequirements.gradTextureHeight = layoutCounts.maxGradTextureHeight;
-    resourceRequirements.tessTextureHeight = layoutCounts.maxTessTextureHeight;
-    resourceRequirements.atlasTextureWidth = layoutCounts.maxAtlasWidth;
-    resourceRequirements.atlasTextureHeight = layoutCounts.maxAtlasHeight;
-    resourceRequirements.coverageBufferLength =
-        layoutCounts.maxCoverageBufferLength;
+    const ResourceAllocationCounts resourceRequirements = {
+        .flushUniformBufferCount = m_logicalFlushes.size(),
+        .imageDrawUniformBufferCount = totalFrameResourceCounts.imageDrawCount,
+        .pathBufferCount =
+            totalFrameResourceCounts.pathCount + layoutCounts.pathPaddingCount,
+        .paintBufferCount =
+            totalFrameResourceCounts.pathCount + layoutCounts.paintPaddingCount,
+        .paintAuxBufferCount = totalFrameResourceCounts.pathCount +
+                               layoutCounts.paintAuxPaddingCount,
+        .contourBufferCount = totalFrameResourceCounts.contourCount +
+                              layoutCounts.contourPaddingCount,
+        .gradSpanBufferCount =
+            layoutCounts.gradSpanCount + layoutCounts.gradSpanPaddingCount,
+        .tessSpanBufferCount =
+            totalFrameResourceCounts.maxTessellatedSegmentCount,
+        .triangleVertexBufferCount =
+            totalFrameResourceCounts.maxTriangleVertexCount,
+        .gradTextureHeight = layoutCounts.maxGradTextureHeight,
+        .tessTextureHeight = layoutCounts.maxTessTextureHeight,
+        .atlasTextureWidth = layoutCounts.maxAtlasWidth,
+        .atlasTextureHeight = layoutCounts.maxAtlasHeight,
+        .plsTransientBackingWidth =
+            (layoutCounts.maxPLSTransientBackingDepth > 0)
+                ? static_cast<size_t>(m_frameDescriptor.renderTargetWidth)
+                : 0,
+        .plsTransientBackingHeight =
+            (layoutCounts.maxPLSTransientBackingDepth > 0)
+                ? static_cast<size_t>(m_frameDescriptor.renderTargetHeight)
+                : 0,
+        .plsTransientBackingDepth = layoutCounts.maxPLSTransientBackingDepth,
+        .plsAtomicCoverageBackingWidth =
+            (frameInterlockMode() == gpu::InterlockMode::atomics)
+                ? static_cast<size_t>(m_frameDescriptor.renderTargetWidth)
+                : 0,
+        .plsAtomicCoverageBackingHeight =
+            (frameInterlockMode() == gpu::InterlockMode::atomics)
+                ? static_cast<size_t>(m_frameDescriptor.renderTargetHeight)
+                : 0,
+        .coverageBufferLength = layoutCounts.maxCoverageBufferLength,
+    };
 
     // Ensure we're within hardware limits.
     assert(resourceRequirements.gradTextureHeight <= kMaxTextureHeight);
@@ -702,23 +734,53 @@ void RenderContext::flush(const FlushResources& flushResources)
     assert(resourceRequirements.atlasTextureHeight <= atlasMaxSize() ||
            resourceRequirements.atlasTextureHeight <=
                frameDescriptor().renderTargetHeight);
+    assert(resourceRequirements.plsTransientBackingWidth <=
+           m_frameDescriptor.renderTargetWidth);
+    assert(resourceRequirements.plsTransientBackingHeight <=
+           m_frameDescriptor.renderTargetHeight);
     assert(resourceRequirements.coverageBufferLength <=
            platformFeatures().maxCoverageBufferLength);
 
+    PUSH_DISABLE_CLANG_SIMD_ABI_WARNING()
+
     // Track m_maxRecentResourceRequirements so we can trim GPU allocations when
     // steady-state usage goes down.
-    m_maxRecentResourceRequirements =
+    m_maxRecentResourceRequirements = ResourceAllocationCounts::FromVec(
         simd::max(resourceRequirements.toVec(),
-                  m_maxRecentResourceRequirements.toVec());
+                  m_maxRecentResourceRequirements.toVec()));
 
     // Grow resources enough to handle this flush.
     // If "allocs" already fits in our current allocations, then don't change
-    // them. If they don't fit, overallocate by 25% in order to create some
-    // slack for growth.
-    ResourceAllocationCounts allocs = simd::if_then_else(
-        resourceRequirements.toVec() <= m_currentResourceAllocations.toVec(),
-        m_currentResourceAllocations.toVec(),
-        resourceRequirements.toVec() * size_t(5) / size_t(4));
+    // them.
+    // If they don't fit, overallocate by the specified amount in order to
+    // create some slack for growth.
+    constexpr static ResourceAllocationCounts OVERALLOC_x4 = {
+        .flushUniformBufferCount = 5,        // 125%
+        .imageDrawUniformBufferCount = 5,    // 125%
+        .pathBufferCount = 5,                // 125%
+        .paintBufferCount = 5,               // 125%
+        .paintAuxBufferCount = 5,            // 125%
+        .contourBufferCount = 5,             // 125%
+        .gradSpanBufferCount = 5,            // 125%
+        .tessSpanBufferCount = 5,            // 125%
+        .triangleVertexBufferCount = 5,      // 125%
+        .gradTextureHeight = 5,              // 125%
+        .tessTextureHeight = 5,              // 125%
+        .atlasTextureWidth = 5,              // 125%
+        .atlasTextureHeight = 5,             // 125%
+        .plsTransientBackingWidth = 4,       // 100% (i.e., don't overallocate)
+        .plsTransientBackingHeight = 4,      // 100% (i.e., don't overallocate)
+        .plsTransientBackingDepth = 4,       // 100% (i.e., don't overallocate)
+        .plsAtomicCoverageBackingWidth = 4,  // 100% (i.e., don't overallocate)
+        .plsAtomicCoverageBackingHeight = 4, // 100% (i.e., don't overallocate)
+        .coverageBufferLength = 5,           // 125%
+    };
+    ResourceAllocationCounts allocs =
+        ResourceAllocationCounts::FromVec(simd::if_then_else(
+            resourceRequirements.toVec() <=
+                m_currentResourceAllocations.toVec(),
+            m_currentResourceAllocations.toVec(),
+            (resourceRequirements.toVec() * OVERALLOC_x4.toVec()) >> 2));
 
     // In case the 25% growth pushed us above limits.
     allocs.gradTextureHeight =
@@ -741,14 +803,38 @@ void RenderContext::flush(const FlushResources& flushResources)
     bool needsResourceTrim = flushTime - m_lastResourceTrimTimeInSeconds >= 5;
     if (needsResourceTrim)
     {
-        // Trim GPU resource allocations to 125% of their maximum recent usage,
-        // and only if the recent usage is 2/3 or less of the current
-        // allocation.
-        allocs = simd::if_then_else(m_maxRecentResourceRequirements.toVec() <=
-                                        allocs.toVec() * size_t(2) / size_t(3),
-                                    m_maxRecentResourceRequirements.toVec() *
-                                        size_t(5) / size_t(4),
-                                    allocs.toVec());
+        // Trim GPU resource allocations to their maximum recent usage, plus
+        // overallocation, and only if the recent usage is below a certain
+        // threshold.
+        constexpr static ResourceAllocationCounts SHRINK_THRESHOLD_x3 = {
+            .flushUniformBufferCount = 2,        // 66.7%
+            .imageDrawUniformBufferCount = 2,    // 66.7%
+            .pathBufferCount = 2,                // 66.7%
+            .paintBufferCount = 2,               // 66.7%
+            .paintAuxBufferCount = 2,            // 66.7%
+            .contourBufferCount = 2,             // 66.7%
+            .gradSpanBufferCount = 2,            // 66.7%
+            .tessSpanBufferCount = 2,            // 66.7%
+            .triangleVertexBufferCount = 2,      // 66.7%
+            .gradTextureHeight = 2,              // 66.7%
+            .tessTextureHeight = 2,              // 66.7%
+            .atlasTextureWidth = 2,              // 66.7%
+            .atlasTextureHeight = 2,             // 66.7%
+            .plsTransientBackingWidth = 3,       // 100% (i.e., always shrink)
+            .plsTransientBackingHeight = 3,      // 100% (i.e., always shrink)
+            .plsTransientBackingDepth = 3,       // 100% (i.e., always shrink)
+            .plsAtomicCoverageBackingWidth = 3,  // 100% (i.e., always shrink)
+            .plsAtomicCoverageBackingHeight = 3, // 100% (i.e., always shrink)
+            .coverageBufferLength = 2,           // 66.7%
+        };
+        allocs = ResourceAllocationCounts::FromVec(simd::if_then_else(
+            m_maxRecentResourceRequirements.toVec() <=
+                (allocs.toVec() * SHRINK_THRESHOLD_x3.toVec()) / size_t(3),
+            // TODO: Do we actually need overallocation here?? Or should we just
+            // trust the past 5 seconds of steady usage?
+            (m_maxRecentResourceRequirements.toVec() * OVERALLOC_x4.toVec()) >>
+                2,
+            allocs.toVec()));
 
         // Ensure we stayed within limits.
         assert(allocs.gradTextureHeight <= kMaxTextureHeight);
@@ -765,6 +851,9 @@ void RenderContext::flush(const FlushResources& flushResources)
         m_maxRecentResourceRequirements = ResourceAllocationCounts();
         m_lastResourceTrimTimeInSeconds = flushTime;
     }
+
+    assert(simd::all(allocs.toVec() >= resourceRequirements.toVec()));
+    POP_DISABLE_CLANG_SIMD_ABI_WARNING()
 
     setResourceSizes(allocs);
 
@@ -832,6 +921,65 @@ void RenderContext::flush(const FlushResources& flushResources)
     {
         resetContainers();
     }
+}
+
+static uint32_t pls_transient_backing_depth(
+    gpu::InterlockMode interlockMode,
+    gpu::DrawContents combinedDrawContents)
+{
+    switch (interlockMode)
+    {
+        case gpu::InterlockMode::rasterOrdering:
+            return 3; // clip, scratch, coverage
+        case gpu::InterlockMode::atomics:
+            return 1; // only clip (coverage is atomic)
+        case gpu::InterlockMode::clockwise:
+        {
+            uint32_t n = 1; // coverage
+            if (combinedDrawContents &
+                (gpu::DrawContents::activeClip | gpu::DrawContents::clipUpdate))
+            {
+                ++n; // clip
+            }
+            if (combinedDrawContents & gpu::DrawContents::advancedBlend)
+            {
+                ++n; // scratch color
+            }
+            return n;
+        }
+        case gpu::InterlockMode::clockwiseAtomic:
+        case gpu::InterlockMode::msaa:
+            return 0; // N/A
+    }
+    RIVE_UNREACHABLE();
+}
+
+static bool wants_fixed_function_color_output(
+    gpu::InterlockMode interlockMode,
+    gpu::DrawContents combinedDrawContents)
+{
+    switch (interlockMode)
+    {
+        case gpu::InterlockMode::rasterOrdering:
+            // rasterOrdering shaders always read the framebuffer, even with
+            // srcOver blend.
+            return false;
+
+        case gpu::InterlockMode::atomics:
+        case gpu::InterlockMode::msaa:
+            return !(combinedDrawContents & gpu::DrawContents::advancedBlend);
+
+        case gpu::InterlockMode::clockwise:
+            assert(!(combinedDrawContents & (gpu::DrawContents::nonZeroFill |
+                                             gpu::DrawContents::evenOddFill)));
+            return !(combinedDrawContents & gpu::DrawContents::advancedBlend);
+
+        case gpu::InterlockMode::clockwiseAtomic:
+            // clockwiseAtomic currently ignores fixedFunctionColorOutput.
+            return false;
+    }
+
+    RIVE_UNREACHABLE();
 }
 
 void RenderContext::LogicalFlush::layoutResources(
@@ -931,6 +1079,9 @@ void RenderContext::LogicalFlush::layoutResources(
     m_flushDesc.renderTarget = flushResources.renderTarget;
     m_flushDesc.interlockMode = m_ctx->frameInterlockMode();
     m_flushDesc.msaaSampleCount = frameDescriptor.msaaSampleCount;
+    m_flushDesc.fixedFunctionColorOutput =
+        wants_fixed_function_color_output(m_ctx->frameInterlockMode(),
+                                          m_combinedDrawContents);
 
     // In atomic mode, we may be able to skip the explicit clear of the color
     // buffer and fold it into the atomic "resolve" operation instead.
@@ -1039,8 +1190,11 @@ void RenderContext::LogicalFlush::layoutResources(
 
     m_flushDesc.externalCommandBuffer = flushResources.externalCommandBuffer;
 
+    PUSH_DISABLE_CLANG_SIMD_ABI_WARNING()
     *runningFrameResourceCounts =
         runningFrameResourceCounts->toVec() + m_resourceCounts.toVec();
+    POP_DISABLE_CLANG_SIMD_ABI_WARNING()
+
     runningFrameLayoutCounts->pathPaddingCount += m_pathPaddingCount;
     runningFrameLayoutCounts->paintPaddingCount += m_paintPaddingCount;
     runningFrameLayoutCounts->paintAuxPaddingCount += m_paintAuxPaddingCount;
@@ -1057,6 +1211,10 @@ void RenderContext::LogicalFlush::layoutResources(
         std::max(m_atlasMaxX, runningFrameLayoutCounts->maxAtlasWidth);
     runningFrameLayoutCounts->maxAtlasHeight =
         std::max(m_atlasMaxY, runningFrameLayoutCounts->maxAtlasHeight);
+    runningFrameLayoutCounts->maxPLSTransientBackingDepth =
+        std::max(pls_transient_backing_depth(m_flushDesc.interlockMode,
+                                             m_combinedDrawContents),
+                 runningFrameLayoutCounts->maxPLSTransientBackingDepth);
     runningFrameLayoutCounts->maxCoverageBufferLength =
         std::max<size_t>(m_coverageBufferLength,
                          runningFrameLayoutCounts->maxCoverageBufferLength);
@@ -1219,7 +1377,8 @@ void RenderContext::LogicalFlush::writeResources()
 
     // Write out all the data for our high level draws, and build up a low-level
     // draw list.
-    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::rasterOrdering)
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::rasterOrdering ||
+        m_ctx->frameInterlockMode() == gpu::InterlockMode::clockwise)
     {
         for (const DrawUniquePtr& draw : m_draws)
         {
@@ -1380,23 +1539,49 @@ void RenderContext::LogicalFlush::writeResources()
         // Re-order the draws!!
         std::sort(indirectDrawList.begin(), indirectDrawList.end());
 
-        // Atomic mode sometimes needs to initialize PLS with a draw when the
-        // backend can't do it with typical clear/load APIs.
-        if (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics)
+        assert(m_pendingBarriers == BarrierFlags::none);
+        if (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics &&
+            platformFeatures.atomicPLSInitNeedsDraw)
         {
-            assert(m_pendingBarriers == BarrierFlags::none);
-            if (platformFeatures.atomicPLSMustBeInitializedAsDraw)
-            {
-                m_drawList.emplace_back(m_ctx->perFrameAllocator(),
-                                        DrawType::atomicInitialize,
-                                        gpu::ShaderMiscFlags::none,
-                                        1,
-                                        0,
-                                        BlendMode::srcOver,
-                                        ImageSampler::LinearClamp(),
-                                        BarrierFlags::none);
-            }
-            m_pendingBarriers |= BarrierFlags::plsAtomicPostInit;
+            // Atomic mode sometimes needs to initialize PLS with a draw when
+            // the backend can't do it with typical clear/load APIs.
+            // So far only Metal needs this, and its implementation doesn't
+            // require a barrier before or after.
+            m_drawList.emplace_back(m_ctx->perFrameAllocator(),
+                                    gpu::DrawType::renderPassInitialize,
+                                    gpu::ShaderMiscFlags::none,
+                                    gpu::DrawContents::none,
+                                    1,
+                                    0,
+                                    BlendMode::srcOver,
+                                    ImageSampler::LinearClamp(),
+                                    BarrierFlags::none);
+        }
+        else if (m_ctx->frameInterlockMode() == gpu::InterlockMode::msaa &&
+                 m_flushDesc.colorLoadAction ==
+                     gpu::LoadAction::preserveRenderTarget &&
+                 platformFeatures.msaaColorPreserveNeedsDraw)
+        {
+            // When implemented with a transient attachment, MSAA needs us to
+            // draw the old renderTarget contents into the framebuffer at the
+            // beginning of the render pass when
+            // LoadAction::preserveRenderTarget is specified.
+            m_drawList.emplace_back(m_ctx->perFrameAllocator(),
+                                    gpu::DrawType::renderPassInitialize,
+                                    gpu::ShaderMiscFlags::none,
+                                    gpu::DrawContents::opaquePaint,
+                                    1,
+                                    0,
+                                    BlendMode::srcOver,
+                                    ImageSampler::LinearClamp(),
+                                    // The MSAA init reads the framebuffer, so
+                                    // it needs the equivalent of a "dstBlend"
+                                    // barrier.
+                                    BarrierFlags::dstBlend);
+            m_combinedDrawContents |= m_drawList.tail().drawContents;
+            // The draw that follows the this init will need a special
+            // "msaaPostInit" barrier.
+            m_pendingBarriers |= BarrierFlags::msaaPostInit;
         }
 
         // Find a mask that tells us when to insert barriers, and which barriers
@@ -1407,7 +1592,8 @@ void RenderContext::LogicalFlush::writeResources()
         switch (m_flushDesc.interlockMode)
         {
             case gpu::InterlockMode::rasterOrdering:
-                // rasterOrdering mode doesn't reorder draws.
+            case gpu::InterlockMode::clockwise:
+                // rasterOrdering and clockwise modes don't reorder draws.
                 RIVE_UNREACHABLE();
 
             case gpu::InterlockMode::atomics:
@@ -1450,13 +1636,16 @@ void RenderContext::LogicalFlush::writeResources()
 
         // Write out the draw data from the sorted draw list, and build up a
         // condensed/batched list of low-level draws.
-        int64_t priorSignedKey =
-            !indirectDrawList.empty() ? indirectDrawList[0] : 0;
+        constexpr int64_t BEGIN_KEY = std::numeric_limits<int64_t>::min();
+        int64_t priorSignedKey = BEGIN_KEY;
         for (const int64_t signedKey : indirectDrawList)
         {
             assert(signedKey >= priorSignedKey);
-            if ((priorSignedKey & needsBarrierMask) !=
-                (signedKey & needsBarrierMask))
+            // The first draw always gets barriers because we need the barriers
+            // after the initial clears, loads, etc.
+            if (priorSignedKey == BEGIN_KEY ||
+                (priorSignedKey & needsBarrierMask) !=
+                    (signedKey & needsBarrierMask))
             {
                 m_pendingBarriers |= neededBarriers;
             }
@@ -1480,15 +1669,11 @@ void RenderContext::LogicalFlush::writeResources()
         // Atomic mode needs one more draw to resolve all the pixels.
         if (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics)
         {
-            // We can ignore any pending "plsAtomic" barriers; the
-            // plsAtomicPreResolve can replace them.
-            assert((m_pendingBarriers & ~(BarrierFlags::plsAtomic |
-                                          BarrierFlags::plsAtomicPostInit)) ==
-                   BarrierFlags::none);
             m_drawList
                 .emplace_back(m_ctx->perFrameAllocator(),
-                              DrawType::atomicResolve,
+                              gpu::DrawType::renderPassResolve,
                               gpu::ShaderMiscFlags::none,
+                              gpu::DrawContents::none,
                               1,
                               0,
                               BlendMode::srcOver,
@@ -1615,9 +1800,6 @@ void RenderContext::LogicalFlush::writeResources()
     // Some of the flushDescriptor's data isn't known until after
     // writeResources(). Update it now that it's known.
     m_flushDesc.combinedShaderFeatures = m_combinedShaderFeatures;
-    m_flushDesc.atomicFixedFunctionColorOutput =
-        m_ctx->frameInterlockMode() == InterlockMode::atomics &&
-        !(m_combinedShaderFeatures & ShaderFeatures::ENABLE_ADVANCED_BLEND);
 
     if (m_coverageBufferLength > 0)
     {
@@ -1642,6 +1824,16 @@ void RenderContext::LogicalFlush::writeResources()
     // Write out the uniforms for this flush now that the flushDescriptor is
     // complete.
     m_ctx->m_flushUniformData.emplace_back(m_flushDesc, platformFeatures);
+
+#ifndef NDEBUG
+    for (const DrawBatch& batch : *m_flushDesc.drawList)
+    {
+        assert((batch.drawContents & m_combinedDrawContents) ==
+               batch.drawContents);
+        assert((batch.shaderFeatures & m_flushDesc.combinedShaderFeatures) ==
+               batch.shaderFeatures);
+    }
+#endif
 }
 
 void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
@@ -1702,6 +1894,38 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
                    (newHeight * newWidth * bytesPerPixel) >> 10);
         }
 
+        void logTexture3dSize(const char* name,
+                              size_t oldWidth,
+                              size_t oldHeight,
+                              size_t oldDepth,
+                              size_t newWidth,
+                              size_t newHeight,
+                              size_t newDepth,
+                              size_t bytesPerPixel)
+        {
+            m_totalSizeInBytes += newHeight * newWidth * bytesPerPixel;
+            if (oldWidth == newWidth && oldHeight == newHeight &&
+                oldDepth == newDepth)
+            {
+                return;
+            }
+            if (!m_hasChanged)
+            {
+                printf("RenderContext::setResourceSizes():\n");
+                m_hasChanged = true;
+            }
+            printf("  resize %s: [%zu x %zu x %zu] -> [%zu x %zu x %zu] "
+                   "(%zu KiB)\n",
+                   name,
+                   oldWidth,
+                   oldHeight,
+                   oldDepth,
+                   newWidth,
+                   newHeight,
+                   newDepth,
+                   (newHeight * newWidth * newDepth * bytesPerPixel) >> 10);
+        }
+
         ~Logger()
         {
             if (!m_hasChanged)
@@ -1721,19 +1945,33 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
                    m_currentResourceAllocations.NAME,                          \
                    allocs.NAME,                                                \
                    allocs.NAME* ITEM_SIZE_IN_BYTES* gpu::kBufferRingSize)
-#define LOG_TEXTURE_HEIGHT(NAME, BYTES_PER_ROW)                                \
+#define LOG_TEXTURE_SIZE(NAME, BYTES_PER_VALUE)                                \
     logger.logSize(#NAME,                                                      \
                    m_currentResourceAllocations.NAME,                          \
                    allocs.NAME,                                                \
-                   allocs.NAME* BYTES_PER_ROW)
-#define LOG_TEXTURE_SIZE(WIDTH_NAME, HEIGHT_NAME, BYTES_PER_PIXEL)             \
-    logger.logTextureSize(#WIDTH_NAME,                                         \
-                          #HEIGHT_NAME,                                        \
-                          m_currentResourceAllocations.WIDTH_NAME,             \
-                          m_currentResourceAllocations.HEIGHT_NAME,            \
-                          allocs.WIDTH_NAME,                                   \
-                          allocs.HEIGHT_NAME,                                  \
-                          BYTES_PER_PIXEL)
+                   allocs.NAME*(BYTES_PER_VALUE))
+#define LOG_TEXTURE_2D_SIZE(NAME, WIDTH_NAME, HEIGHT_NAME, BYTES_PER_PIXEL)    \
+    logger.logTexture3dSize(NAME,                                              \
+                            m_currentResourceAllocations.WIDTH_NAME,           \
+                            m_currentResourceAllocations.HEIGHT_NAME,          \
+                            1,                                                 \
+                            allocs.WIDTH_NAME,                                 \
+                            allocs.HEIGHT_NAME,                                \
+                            1,                                                 \
+                            BYTES_PER_PIXEL)
+#define LOG_TEXTURE_3D_SIZE(NAME,                                              \
+                            WIDTH_NAME,                                        \
+                            HEIGHT_NAME,                                       \
+                            DEPTH_NAME,                                        \
+                            BYTES_PER_PIXEL)                                   \
+    logger.logTexture3dSize(NAME,                                              \
+                            m_currentResourceAllocations.WIDTH_NAME,           \
+                            m_currentResourceAllocations.HEIGHT_NAME,          \
+                            m_currentResourceAllocations.DEPTH_NAME,           \
+                            allocs.WIDTH_NAME,                                 \
+                            allocs.HEIGHT_NAME,                                \
+                            allocs.DEPTH_NAME,                                 \
+                            BYTES_PER_PIXEL)
 #define LOG_BUFFER_SIZE(NAME, BYTES_PER_ELEMENT)                               \
     logger.logSize(#NAME,                                                      \
                    m_currentResourceAllocations.NAME,                          \
@@ -1741,8 +1979,13 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
                    allocs.NAME* BYTES_PER_ELEMENT)
 #else
 #define LOG_BUFFER_RING_SIZE(NAME, ITEM_SIZE_IN_BYTES)
-#define LOG_TEXTURE_HEIGHT(NAME, BYTES_PER_ROW)
-#define LOG_TEXTURE_SIZE(WIDTH_NAME, HEIGHT_NAME, BYTES_PER_PIXEL)
+#define LOG_TEXTURE_SIZE(NAME, BYTES_PER_ROW)
+#define LOG_TEXTURE_2D_SIZE(NAME, WIDTH_NAME, HEIGHT_NAME, BYTES_PER_PIXEL)
+#define LOG_TEXTURE_3D_SIZE(NAME,                                              \
+                            WIDTH_NAME,                                        \
+                            HEIGHT_NAME,                                       \
+                            DEPTH_NAME,                                        \
+                            BYTES_PER_PIXEL)
 #define LOG_BUFFER_SIZE(NAME, BYTES_PER_ELEMENT)
 #endif
 
@@ -1834,7 +2077,7 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
     }
 
     assert(allocs.gradTextureHeight <= kMaxTextureHeight);
-    LOG_TEXTURE_HEIGHT(gradTextureHeight, gpu::kGradTextureWidth * 4);
+    LOG_TEXTURE_SIZE(gradTextureHeight, gpu::kGradTextureWidth * 4);
     if (allocs.gradTextureHeight !=
             m_currentResourceAllocations.gradTextureHeight ||
         forceRealloc)
@@ -1845,7 +2088,7 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
     }
 
     assert(allocs.tessTextureHeight <= kMaxTextureHeight);
-    LOG_TEXTURE_HEIGHT(tessTextureHeight, gpu::kTessTextureWidth * 4 * 4);
+    LOG_TEXTURE_SIZE(tessTextureHeight, gpu::kTessTextureWidth * 4 * 4);
     if (allocs.tessTextureHeight !=
             m_currentResourceAllocations.tessTextureHeight ||
         forceRealloc)
@@ -1859,7 +2102,10 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
            allocs.atlasTextureWidth <= frameDescriptor().renderTargetWidth);
     assert(allocs.atlasTextureHeight <= atlasMaxSize() ||
            allocs.atlasTextureHeight <= frameDescriptor().renderTargetHeight);
-    LOG_TEXTURE_SIZE(atlasTextureWidth, atlasTextureHeight, sizeof(uint16_t));
+    LOG_TEXTURE_2D_SIZE("atlasTexture",
+                        atlasTextureWidth,
+                        atlasTextureHeight,
+                        sizeof(uint16_t));
     if (allocs.atlasTextureWidth !=
             m_currentResourceAllocations.atlasTextureWidth ||
         allocs.atlasTextureHeight !=
@@ -1869,6 +2115,50 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
         m_impl->resizeAtlasTexture(
             math::lossless_numeric_cast<uint32_t>(allocs.atlasTextureWidth),
             math::lossless_numeric_cast<uint32_t>(allocs.atlasTextureHeight));
+    }
+
+    assert(allocs.plsTransientBackingDepth <=
+           RenderContextImpl::PLS_TRANSIENT_BACKING_MAX_DEPTH);
+    LOG_TEXTURE_3D_SIZE("plsTransientBacking",
+                        plsTransientBackingWidth,
+                        plsTransientBackingHeight,
+                        plsTransientBackingDepth,
+                        sizeof(uint32_t));
+    if (allocs.plsTransientBackingWidth !=
+            m_currentResourceAllocations.plsTransientBackingWidth ||
+        allocs.plsTransientBackingHeight !=
+            m_currentResourceAllocations.plsTransientBackingHeight ||
+        allocs.plsTransientBackingDepth !=
+            m_currentResourceAllocations.plsTransientBackingDepth ||
+        forceRealloc)
+    {
+        m_impl->resizeTransientPLSBacking(math::lossless_numeric_cast<uint32_t>(
+                                              allocs.plsTransientBackingWidth),
+                                          math::lossless_numeric_cast<uint32_t>(
+                                              allocs.plsTransientBackingHeight),
+                                          math::lossless_numeric_cast<uint32_t>(
+                                              allocs.plsTransientBackingDepth));
+    }
+
+    assert(allocs.plsAtomicCoverageBackingWidth <=
+           allocs.plsTransientBackingWidth);
+    assert(allocs.plsAtomicCoverageBackingHeight <=
+           allocs.plsTransientBackingHeight);
+    LOG_TEXTURE_2D_SIZE("plsAtomicCoverageBacking",
+                        plsAtomicCoverageBackingWidth,
+                        plsAtomicCoverageBackingHeight,
+                        sizeof(uint32_t));
+    if (allocs.plsAtomicCoverageBackingWidth !=
+            m_currentResourceAllocations.plsAtomicCoverageBackingWidth ||
+        allocs.plsAtomicCoverageBackingHeight !=
+            m_currentResourceAllocations.plsAtomicCoverageBackingHeight ||
+        forceRealloc)
+    {
+        m_impl->resizeAtomicCoverageBacking(
+            math::lossless_numeric_cast<uint32_t>(
+                allocs.plsAtomicCoverageBackingWidth),
+            math::lossless_numeric_cast<uint32_t>(
+                allocs.plsAtomicCoverageBackingHeight));
     }
 
     assert(allocs.coverageBufferLength <=
@@ -2615,6 +2905,14 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushPathDraw(
     RIVE_PROF_SCOPE()
     assert(m_hasDoneLayout);
 
+    // Clockwise mode gives clip updates a dedicated draw by setting
+    // gpu::ShaderMiscFlags::clipUpdateOnly.
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::clockwise &&
+        (draw->drawContents() & gpu::DrawContents::clipUpdate))
+    {
+        shaderMiscFlags |= gpu::ShaderMiscFlags::clipUpdateOnly;
+    }
+
     DrawBatch& batch = pushDraw(draw,
                                 drawType,
                                 shaderMiscFlags,
@@ -2631,7 +2929,7 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushPathDraw(
     }
     if (draw->drawContents() & gpu::DrawContents::evenOddFill)
     {
-        assert(!(shaderMiscFlags & gpu::ShaderMiscFlags::clockwiseFill));
+        assert(!(batch.shaderMiscFlags & gpu::ShaderMiscFlags::clockwiseFill));
         pathShaderFeatures |= ShaderFeatures::ENABLE_EVEN_ODD;
     }
     constexpr static gpu::DrawContents NESTED_CLIP_FLAGS =
@@ -2642,11 +2940,11 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushPathDraw(
     }
     batch.shaderFeatures |=
         pathShaderFeatures & m_ctx->m_frameShaderFeaturesMask;
-    m_combinedShaderFeatures |= batch.shaderFeatures;
     assert(
         (batch.shaderFeatures &
          gpu::ShaderFeaturesMaskFor(drawType, m_ctx->frameInterlockMode())) ==
         batch.shaderFeatures);
+    m_combinedShaderFeatures |= batch.shaderFeatures;
     return batch;
 }
 
@@ -2756,33 +3054,45 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         // own unique uniforms.
         case DrawType::imageRect:
         case DrawType::imageMesh:
-        case DrawType::atomicInitialize:
-        case DrawType::atomicResolve:
+        case DrawType::renderPassInitialize:
+        case DrawType::renderPassResolve:
             canMergeWithPreviousBatch = false;
             break;
     }
 
     DrawBatch* batch;
-    if (canMergeWithPreviousBatch)
+    if (!canMergeWithPreviousBatch)
+    {
+        batch = &m_drawList.emplace_back(
+            m_ctx->perFrameAllocator(),
+            drawType,
+            shaderMiscFlags,
+            draw->drawContents(),
+            elementCount,
+            baseElement,
+            draw->blendMode(),
+            draw->imageSampler(),
+            std::exchange(m_pendingBarriers, BarrierFlags::none));
+    }
+    else
     {
         batch = &m_drawList.tail();
         assert(m_pendingBarriers == BarrierFlags::none);
         assert(batch->drawType == drawType);
         assert(batch->shaderMiscFlags == shaderMiscFlags);
         assert(batch->baseElement + batch->elementCount == baseElement);
+
         batch->elementCount += elementCount;
-    }
-    else
-    {
-        batch = &m_drawList.emplace_back(
-            m_ctx->perFrameAllocator(),
-            drawType,
-            shaderMiscFlags,
-            elementCount,
-            baseElement,
-            draw->blendMode(),
-            draw->imageSampler(),
-            std::exchange(m_pendingBarriers, BarrierFlags::none));
+
+        // clockwise doesn't mix regular draws and clip updates.
+        assert(
+            m_ctx->frameInterlockMode() != gpu::InterlockMode::clockwise ||
+            (batch->drawContents & gpu::DrawContents::clipUpdate).bits() ==
+                (draw->drawContents() & gpu::DrawContents::clipUpdate).bits());
+        // msaa can't mix drawContents in a batch.
+        assert(m_ctx->frameInterlockMode() != gpu::InterlockMode::msaa ||
+               batch->drawContents == draw->drawContents());
+        batch->drawContents |= draw->drawContents();
     }
 
     // If the batch was merged into a previous one, this ensures it was a valid
@@ -2804,8 +3114,9 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         shaderFeatures |= ShaderFeatures::ENABLE_CLIP_RECT;
     }
     if (paintType != PaintType::clipUpdate &&
-        !(shaderMiscFlags & gpu::ShaderMiscFlags::borrowedCoveragePrepass))
+        !(shaderMiscFlags & gpu::ShaderMiscFlags::borrowedCoveragePass))
     {
+        assert(!(shaderMiscFlags & gpu::ShaderMiscFlags::clipUpdateOnly));
         switch (draw->blendMode())
         {
             case BlendMode::hue:
@@ -2832,13 +3143,10 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         }
     }
     batch->shaderFeatures |= shaderFeatures & m_ctx->m_frameShaderFeaturesMask;
-    m_combinedShaderFeatures |= batch->shaderFeatures;
     assert(
         (batch->shaderFeatures &
          gpu::ShaderFeaturesMaskFor(drawType, m_ctx->frameInterlockMode())) ==
         batch->shaderFeatures);
-
-    batch->drawContents |= draw->drawContents();
 
     if (paintType == PaintType::image)
     {
@@ -2852,8 +3160,6 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
 
     if (m_ctx->frameInterlockMode() == gpu::InterlockMode::msaa)
     {
-        // msaa can't mix drawContents in a batch.
-        assert(batch->drawContents == draw->drawContents());
         // msaa does't mix src-over draws with advanced blend draws.
         assert((batch->shaderFeatures &
                 gpu::ShaderFeatures::ENABLE_ADVANCED_BLEND) ==
@@ -2884,6 +3190,7 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         }
     }
 
+    m_combinedShaderFeatures |= batch->shaderFeatures;
     return *batch;
 }
 } // namespace rive::gpu

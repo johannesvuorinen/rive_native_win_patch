@@ -124,6 +124,12 @@ final double Function(Pointer<Void> state, int idx, Pointer<Int32> isnum)
                     Pointer<Void>, Int32, Pointer<Int32>)>>('lua_tonumberx')
         .asFunction();
 
+final Pointer<Float> Function(Pointer<Void> state, int idx) _riveLuaToVector =
+    _nativeLib
+        .lookup<NativeFunction<Pointer<Float> Function(Pointer<Void>, Int32)>>(
+            'lua_tovector')
+        .asFunction();
+
 final int Function(Pointer<Void> state, int idx, Pointer<Int32> isnum)
     _riveLuaToInteger = _nativeLib
         .lookup<
@@ -167,6 +173,12 @@ final void Function(Pointer<Void> state, double value) _riveLuaPushNumber =
           'lua_pushnumber',
         )
         .asFunction();
+final void Function(Pointer<Void> state, double x, double y)
+    _riveLuaPushVector = _nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Float, Float)>>(
+          'lua_pushvector2',
+        )
+        .asFunction();
 
 final void Function(Pointer<Void> state, int index) _riveLuaPushValue =
     _nativeLib
@@ -205,6 +217,31 @@ final void Function(Pointer<Void> scriptedRenderer)
         .lookup<NativeFunction<Void Function(Pointer<Void>)>>(
           'riveLuaScriptedRendererEnd',
         )
+        .asFunction();
+
+final Pointer<Utf8> Function(Pointer<Void> scriptedRenderer)
+    _riveLuaScriptedDataValueType = _nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+          'riveLuaScriptedDataValueType',
+        )
+        .asFunction();
+
+final double Function(Pointer<Void> state)
+    _riveLuaScriptedDataValueNumberValue = nativeLib
+        .lookup<NativeFunction<Float Function(Pointer<Void>)>>(
+            'riveLuaScriptedDataValueNumberValue')
+        .asFunction();
+
+final Pointer<Utf8> Function(Pointer<Void> state)
+    _riveLuaScriptedDataValueStringValue = nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+            'riveLuaScriptedDataValueStringValue')
+        .asFunction();
+
+final bool Function(Pointer<Void> imageAsset)
+    _riveLuaScriptedDataValueBooleanValue = nativeLib
+        .lookup<NativeFunction<Bool Function(Pointer<Void>)>>(
+            'riveLuaScriptedDataValueBooleanValue')
         .asFunction();
 
 final void Function(Pointer<Void> state, int value) _riveLuaSetTop = _nativeLib
@@ -256,6 +293,13 @@ final void Function(Pointer<Void> state, Pointer<Utf8>) _riveLuaPushString =
         )
         .asFunction();
 
+final void Function(Pointer<Void> state, bool value) _riveLuaPushBoolean =
+    _nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Bool)>>(
+          'lua_pushboolean',
+        )
+        .asFunction();
+
 final void Function(
   Pointer<Void> state,
   Pointer<NativeFunction<LuaCFunction>>,
@@ -303,11 +347,50 @@ final int Function(Pointer<Void> state, int idx, int n) _riveLuaRawGeti =
             'lua_rawgeti')
         .asFunction();
 
-class LuauStateFFI extends LuauState {
+final Pointer<Void> Function(Pointer<Void> state, double)
+    _riveLuaPushDataValueNumber = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Float)>>(
+          'riveLuaPushDataValueNumber',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, Pointer<Utf8>)
+    _riveLuaPushDataValueString = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>)>>(
+          'riveLuaPushDataValueString',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, bool)
+    _riveLuaPushDataValueBoolean = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Bool)>>(
+          'riveLuaPushDataValueBoolean',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int idx) _riveLuaToDataValue =
+    _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Int32)>>(
+          'riveLuaDataValue',
+        )
+        .asFunction();
+
+final void Function(Pointer<Void>, Pointer<Void>)
+    _riveLuaRegisterStateWithFile = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'setScriptingVM')
+        .asFunction();
+
+class LuauStateFFI extends LuauState implements RiveFFIReference {
   Pointer<Void> nativePtr;
   final List<NativeCallable> _nativeCallables = [];
 
   LuauStateFFI(this.nativePtr);
+
+  @override
+  Pointer<Void> get pointer => nativePtr;
 
   LuauStateFFI.fromFactory(Factory riveFactory) : nativePtr = nullptr {
     final consoleHasDataCallback = NativeCallable<Void Function()>.isolateLocal(
@@ -408,6 +491,11 @@ class LuauStateFFI extends LuauState {
   }
 
   @override
+  void registerStateWithFile(File file) {
+    _riveLuaRegisterStateWithFile(pointer, (file as RiveFFIReference).pointer);
+  }
+
+  @override
   LuauStatus pcall(int numArgs, int numResults) {
     int code = _riveLuaPCall(nativePtr, numArgs, numResults);
     if (code < LuauStatus.values.length) {
@@ -450,6 +538,9 @@ class LuauStateFFI extends LuauState {
     assert(value > 0);
     _riveLuaPushUnsigned(nativePtr, value);
   }
+
+  @override
+  void pushBoolean(bool value) => _riveLuaPushBoolean(nativePtr, value);
 
   @override
   void setField(int index, String name) =>
@@ -558,6 +649,42 @@ class LuauStateFFI extends LuauState {
 
   @override
   void unref(int id) => _riveLuaUnref(nativePtr, id);
+
+  @override
+  ScriptedDataValue pushDataValueNumber(double value) {
+    final nativeDataValueNumber = _riveLuaPushDataValueNumber(nativePtr, value);
+    return FFIScriptedDataValue(nativeDataValueNumber);
+  }
+
+  @override
+  ScriptedDataValue pushDataValueString(String value) {
+    final nativeDataValueString =
+        _riveLuaPushDataValueString(nativePtr, toNativeString(value));
+    return FFIScriptedDataValue(nativeDataValueString);
+  }
+
+  @override
+  ScriptedDataValue pushDataValueBoolean(bool value) {
+    final nativeDataValueNumber =
+        _riveLuaPushDataValueBoolean(nativePtr, value);
+    return FFIScriptedDataValue(nativeDataValueNumber);
+  }
+
+  @override
+  ScriptedDataValue dataValueAt(int index) =>
+      FFIScriptedDataValue(_riveLuaToDataValue(nativePtr, index));
+
+  @override
+  Vec2D vectorAt(int index) {
+    final pointer = _riveLuaToVector(nativePtr, index);
+    final x = pointer.value;
+    final y = (pointer + 1).value;
+    return Vec2D.fromValues(x, y);
+  }
+
+  @override
+  void pushVector(Vec2D value) =>
+      _riveLuaPushVector(nativePtr, value.x, value.y);
 }
 
 final class BufferResponse extends Struct {
@@ -596,6 +723,33 @@ class FFIScriptedRenderer extends ScriptedRenderer {
   void end() {
     _riveLuaScriptedRendererEnd(pointer);
     pointer = nullptr;
+  }
+}
+
+class FFIScriptedDataValue extends ScriptedDataValue {
+  Pointer<Void> pointer;
+  FFIScriptedDataValue(this.pointer);
+  @override
+  String get type {
+    return safeString(_riveLuaScriptedDataValueType(pointer));
+  }
+
+  @override
+  double numberValue() {
+    final val = _riveLuaScriptedDataValueNumberValue(pointer);
+    return val;
+  }
+
+  @override
+  String stringValue() {
+    final val = _riveLuaScriptedDataValueStringValue(pointer);
+    return safeString(val);
+  }
+
+  @override
+  bool booleanValue() {
+    final val = _riveLuaScriptedDataValueBooleanValue(pointer);
+    return val;
   }
 }
 

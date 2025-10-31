@@ -39,6 +39,7 @@ late js.JSFunction _riveLuaPushNil;
 late js.JSFunction _riveLuaPushUnsigned;
 late js.JSFunction _riveLuaPushInteger;
 late js.JSFunction _riveLuaPushString;
+late js.JSFunction _riveLuaPushBoolean;
 late js.JSFunction _riveLuaPushClosure;
 late js.JSFunction _riveLuaCall;
 late js.JSFunction _riveLuaPCall;
@@ -49,6 +50,17 @@ late js.JSFunction _riveLuaRawGeti;
 late js.JSFunction _riveLuaConsole;
 late js.JSFunction _riveLuaConsoleClear;
 late js.JSFunction _riveLuaGC;
+late js.JSFunction _riveLuaScriptedDataValueType;
+late js.JSFunction _riveLuaScriptedDataValueNumberValue;
+late js.JSFunction _riveLuaScriptedDataValueStringValue;
+late js.JSFunction _riveLuaScriptedDataValueBooleanValue;
+late js.JSFunction _riveLuaPushDataValueNumber;
+late js.JSFunction _riveLuaPushDataValueString;
+late js.JSFunction _riveLuaPushDataValueBoolean;
+late js.JSFunction _riveLuaToDataValue;
+late js.JSFunction _riveLuaRegisterStateWithFile;
+late js.JSFunction _riveLuaPushVector;
+late js.JSFunction _riveLuaToVector;
 
 bool _wasmBool(js.JSAny? value) => (value as js.JSNumber).toDartInt == 1;
 
@@ -85,6 +97,7 @@ class LuauStateWasm extends LuauState {
     _riveLuaPushUnsigned = module['_lua_pushunsigned'] as js.JSFunction;
     _riveLuaPushInteger = module['_lua_pushinteger'] as js.JSFunction;
     _riveLuaPushString = module['_lua_pushstring'] as js.JSFunction;
+    _riveLuaPushBoolean = module['_lua_pushboolean'] as js.JSFunction;
     _riveLuaPushClosure = module['riveLuaPushClosure'] as js.JSFunction;
     _riveLuaCall = module['_riveLuaCall'] as js.JSFunction;
     _riveLuaPCall = module['_riveLuaPCall'] as js.JSFunction;
@@ -95,6 +108,24 @@ class LuauStateWasm extends LuauState {
     _riveLuaConsole = module['riveLuaConsole'] as js.JSFunction;
     _riveLuaConsoleClear = module['_riveLuaConsoleClear'] as js.JSFunction;
     _riveLuaGC = module['_lua_gc'] as js.JSFunction;
+    _riveLuaScriptedDataValueType =
+        module['_riveLuaScriptedDataValueType'] as js.JSFunction;
+    _riveLuaScriptedDataValueNumberValue =
+        module['_riveLuaScriptedDataValueNumberValue'] as js.JSFunction;
+    _riveLuaScriptedDataValueStringValue =
+        module['_riveLuaScriptedDataValueStringValue'] as js.JSFunction;
+    _riveLuaScriptedDataValueBooleanValue =
+        module['_riveLuaScriptedDataValueBooleanValue'] as js.JSFunction;
+    _riveLuaPushDataValueNumber =
+        module['_riveLuaPushDataValueNumber'] as js.JSFunction;
+    _riveLuaPushDataValueString =
+        module['_riveLuaPushDataValueString'] as js.JSFunction;
+    _riveLuaPushDataValueBoolean =
+        module['_riveLuaPushDataValueBoolean'] as js.JSFunction;
+    _riveLuaToDataValue = module['_riveLuaDataValue'] as js.JSFunction;
+    _riveLuaRegisterStateWithFile = module['_setScriptingVM'] as js.JSFunction;
+    _riveLuaPushVector = module['_lua_pushvector2'] as js.JSFunction;
+    _riveLuaToVector = module['_lua_tovector'] as js.JSFunction;
   }
 
   js.JSAny _nativePtr = 0.toJS;
@@ -112,6 +143,8 @@ class LuauStateWasm extends LuauState {
     ) as js.JSAny;
     _states[_nativeIntegerPointer] = this;
   }
+
+  int get pointer => _nativeIntegerPointer;
 
   @override
   void dispose() {
@@ -258,6 +291,11 @@ class LuauStateWasm extends LuauState {
       );
 
   @override
+  void registerStateWithFile(covariant WebRiveFile file) =>
+      _riveLuaRegisterStateWithFile.callAsFunction(
+          null, _nativePtr, file.pointer.toJS);
+
+  @override
   double numberAt(int index) =>
       (_riveLuaToNumber.callAsFunction(null, _nativePtr, index.toJS, 0.toJS)
               as js.JSNumber)
@@ -346,6 +384,10 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
+  void pushBoolean(bool value) =>
+      _riveLuaPushBoolean.callAsFunction(null, _nativePtr, value.toJS);
+
+  @override
   void pushValue(int index) =>
       _riveLuaPushValue.callAsFunction(null, _nativePtr, index.toJS);
 
@@ -405,6 +447,45 @@ class LuauStateWasm extends LuauState {
       (_riveLuaGC.callAsFunction(null, _nativePtr, what.index.toJS, data.toJS)
               as js.JSNumber)
           .toDartInt;
+
+  @override
+  ScriptedDataValue pushDataValueNumber(double value) {
+    final nativeDataValueNumber = _riveLuaPushDataValueNumber.callAsFunction(
+        null, _nativePtr, value.toJS) as js.JSAny;
+    return ScriptedDataValueWasm(nativeDataValueNumber);
+  }
+
+  @override
+  ScriptedDataValue pushDataValueString(String value) {
+    final nativeDataValueString = _riveLuaPushDataValueString.callAsFunction(
+        null, _nativePtr, value.toJS) as js.JSAny;
+    return ScriptedDataValueWasm(nativeDataValueString);
+  }
+
+  @override
+  ScriptedDataValue pushDataValueBoolean(bool value) {
+    final nativeDataValueNumber = _riveLuaPushDataValueBoolean.callAsFunction(
+        null, _nativePtr, value.toJS) as js.JSAny;
+    return ScriptedDataValueWasm(nativeDataValueNumber);
+  }
+
+  @override
+  ScriptedDataValue dataValueAt(int index) => ScriptedDataValueWasm(
+      _riveLuaToDataValue.callAsFunction(null, _nativePtr, index.toJS)
+          as js.JSAny);
+
+  @override
+  void pushVector(Vec2D value) => _riveLuaPushVector.callAsFunction(
+      null, _nativePtr, value.x.toJS, value.y.toJS);
+
+  @override
+  Vec2D vectorAt(int index) {
+    final pointer = (_riveLuaToVector.callAsFunction(
+            null, _nativePtr, index.toJS) as js.JSNumber)
+        .toDartInt;
+    final content = RiveWasm.heapViewF32(pointer, 2);
+    return Vec2D.fromValues(content[0], content[1]);
+  }
 }
 
 class ScriptedRendererWasm extends ScriptedRenderer {
@@ -419,3 +500,42 @@ class ScriptedRendererWasm extends ScriptedRenderer {
 
 LuauState makeLuauState(Factory riveFactory) =>
     LuauStateWasm(riveFactory as WebFactory);
+
+class ScriptedDataValueWasm extends ScriptedDataValue {
+  js.JSAny pointer;
+  ScriptedDataValueWasm(this.pointer);
+
+  @override
+  String get type {
+    return RiveWasm.toDartString(
+        (_riveLuaScriptedDataValueType.callAsFunction(null, pointer)
+                as js.JSNumber)
+            .toDartInt,
+        deleteNative: true);
+  }
+
+  @override
+  double numberValue() {
+    final val = (_riveLuaScriptedDataValueNumberValue.callAsFunction(
+            null, pointer) as js.JSNumber)
+        .toDartDouble;
+    return val;
+  }
+
+  @override
+  String stringValue() {
+    return RiveWasm.toDartString(
+        (_riveLuaScriptedDataValueStringValue.callAsFunction(null, pointer)
+                as js.JSNumber)
+            .toDartInt,
+        deleteNative: true);
+  }
+
+  @override
+  bool booleanValue() {
+    return _wasmBool(_riveLuaScriptedDataValueBooleanValue.callAsFunction(
+      null,
+      pointer,
+    ));
+  }
+}
