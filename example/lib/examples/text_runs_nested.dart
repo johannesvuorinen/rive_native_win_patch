@@ -36,11 +36,14 @@ class _ExampleTextRunsState extends State<ExampleTextRunsNested> {
       stateMachineName: 'State Machine 1',
       withArtboard: (artboard) {
         // https://rive.app/docs/runtimes/text#read%2Fupdate-nested-text-runs-at-runtime
+        // ignore: deprecated_member_use
         final initialText = artboard.getText('button_text',
             path: 'ArtboardWithUniqueName/ButtonWithUniqueName');
         debugPrint('Initial text: $initialText');
+        // ignore: deprecated_member_use
         artboard.setText('button_text', 'Hello, world!',
             path: 'ArtboardWithUniqueName/ButtonWithUniqueName');
+        // ignore: deprecated_member_use
         final updatedText = artboard.getText('button_text',
             path: 'ArtboardWithUniqueName/ButtonWithUniqueName');
         debugPrint('Updated text: $updatedText');

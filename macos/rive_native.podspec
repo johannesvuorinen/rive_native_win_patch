@@ -68,7 +68,10 @@ Rive Flutter's native macOS plugin
       :name => 'Rive Native Compile',
       :script => script,
       :execution_position => :before_compile,
-      :output_files => ['${PODS_TARGET_SRCROOT}/rive_marker_macos_setup_complete']
+      :output_files => [
+        '${PODS_TARGET_SRCROOT}/rive_marker_macos_setup_complete',
+        '$(PODS_TARGET_SRCROOT)/../native/build/macosx/bin/release/librive_native.a'
+      ]
     }
   ]
 

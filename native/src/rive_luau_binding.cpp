@@ -9,6 +9,9 @@
 #include "rive/core/binary_stream.hpp"
 #include "luau_error_parser.hpp"
 
+const rive::RawPath& renderPathToRawPath(rive::Factory* factory,
+                                         rive::RenderPath* renderPath);
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -367,6 +370,18 @@ EXPORT void riveLuaPushArtboard(lua_State* state,
                                   wrappedArtboard->artboard()->instance());
 }
 
+EXPORT void riveLuaPushPath(lua_State* state,
+                            Factory* factory,
+                            RenderPath* renderPath)
+{
+    if (state == nullptr || renderPath == nullptr)
+    {
+        return;
+    }
+    const rive::RawPath& rawPath = renderPathToRawPath(factory, renderPath);
+    lua_newrive<ScriptedPathData>(state, &rawPath);
+}
+
 EXPORT ScriptedRenderer* riveLuaPushRenderer(lua_State* state,
                                              Renderer* renderer)
 {
@@ -385,6 +400,23 @@ EXPORT ScriptedDataValue* riveLuaDataValue(lua_State* state, int index)
     }
     auto scriptedDataValue = (ScriptedDataValue*)lua_touserdata(state, index);
     return scriptedDataValue;
+}
+
+EXPORT ScriptedPath* riveLuaPath(lua_State* state, int index)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto scriptedPath = (ScriptedPath*)lua_touserdata(state, index);
+    return scriptedPath;
+}
+
+EXPORT RenderPath* riveLuaRenderPath(lua_State* state, ScriptedPath* path)
+{
+    auto renderPath = path->renderPath(state);
+    renderPath->ref();
+    return renderPath;
 }
 
 EXPORT ScriptedDataValueNumber* riveLuaPushDataValueNumber(lua_State* state,
@@ -420,6 +452,35 @@ EXPORT ScriptedDataValueBoolean* riveLuaPushDataValueBoolean(lua_State* state,
     return lua_newrive<ScriptedDataValueBoolean>(state, state, value);
 }
 
+EXPORT ScriptedDataValueColor* riveLuaPushDataValueColor(lua_State* state,
+                                                         int value)
+
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+
+    return lua_newrive<ScriptedDataValueColor>(state, state, value);
+}
+
+EXPORT ScriptedPointerEvent* riveLuaPushPointerEvent(lua_State* state,
+                                                     uint8_t id,
+                                                     float x,
+                                                     float y)
+{
+    return lua_newrive<ScriptedPointerEvent>(state, id, Vec2D(x, y));
+}
+
+EXPORT uint8_t riveLuaPointerEventHitResult(ScriptedPointerEvent* pointerEvent)
+{
+    if (pointerEvent == nullptr)
+    {
+        return 0;
+    }
+    return (uint8_t)pointerEvent->m_hitResult;
+}
+
 EXPORT const char* riveLuaScriptedDataValueType(
     ScriptedDataValue* scriptedDataValue)
 {
@@ -438,6 +499,10 @@ EXPORT const char* riveLuaScriptedDataValueType(
     if (scriptedDataValue->isBoolean())
     {
         return "DataValueBoolean";
+    }
+    if (scriptedDataValue->isColor())
+    {
+        return "DataValueColor";
     }
     return "";
 }
@@ -477,6 +542,18 @@ EXPORT bool riveLuaScriptedDataValueBooleanValue(
         scriptedDataValue->dataValue()->is<DataValueBoolean>())
     {
         return scriptedDataValue->dataValue()->as<DataValueBoolean>()->value();
+    }
+    return false;
+}
+
+EXPORT int riveLuaScriptedDataValueColorValue(
+    ScriptedDataValue* scriptedDataValue)
+{
+    if (scriptedDataValue != nullptr &&
+        scriptedDataValue->dataValue() != nullptr &&
+        scriptedDataValue->dataValue()->is<DataValueColor>())
+    {
+        return scriptedDataValue->dataValue()->as<DataValueColor>()->value();
     }
     return false;
 }
@@ -606,8 +683,9 @@ EXPORT void riveLuaPushClosure(WasmPtr state,
 
     int upvalue = (int)context->closures.size();
     context->closures.push_back(fn);
+
     lua_pushinteger(L, upvalue);
-    lua_pushcclosurek(L, lua_callback, name, 2, nullptr);
+    lua_pushcclosurek(L, lua_callback, name, 1, nullptr);
 }
 
 EMSCRIPTEN_BINDINGS(RiveLuauBinding)

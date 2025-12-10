@@ -16,8 +16,12 @@ class _ExampleBasicState extends State<ExampleBasic> {
       stateMachineName: "State Machine 1",
       withStateMachine: (sm) {
         // Find the number rating and set it to 3
+        // ignore: deprecated_member_use
         var ratingInput = sm.number("rating")!;
         ratingInput.value = 3;
+        // Other inputs:
+        // var trigger = sm.trigger("sometrigger");
+        // var boolean = sm.boolean("someboolean");
       },
     );
   }

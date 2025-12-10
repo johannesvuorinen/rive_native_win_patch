@@ -8,6 +8,7 @@
 #include "rive/shapes/paint/blend_mode.hpp"
 #include "rive/shapes/paint/shape_paint.hpp"
 #include "rive/shapes/path_composer.hpp"
+#include "rive/artboard.hpp"
 #include "rive/clip_result.hpp"
 #include "rive/math/contour_measure.hpp"
 #include "rive/math/raw_path.hpp"
@@ -119,35 +120,39 @@ void Shape::addToRenderPath(RenderPath* path, const Mat2D& transform)
     }
 }
 
+void Shape::addToRawPath(RawPath& path, const Mat2D* transform)
+{
+    if (isFlagged(PathFlags::local))
+    {
+        Mat2D xform = transform == nullptr ? worldTransform()
+                                           : (*transform) * worldTransform();
+        path.addPath(*m_PathComposer.localPath()->rawPath(), &xform);
+    }
+    else
+    {
+        path.addPath(*m_PathComposer.worldPath()->rawPath(), transform);
+    }
+}
+
 void Shape::draw(Renderer* renderer)
 {
     RIVE_PROF_SCOPE()
-    if (renderOpacity() == 0.0f)
+    for (auto shapePaint : m_ShapePaints)
     {
-        return;
-    }
-    ClipResult clipResult = applyClip(renderer);
-
-    if (clipResult != ClipResult::emptyClip)
-    {
-        for (auto shapePaint : m_ShapePaints)
+        if (!shapePaint->isVisible())
         {
-            if (!shapePaint->isVisible())
-            {
-                continue;
-            }
-            auto shapePaintPath = shapePaint->pickPath(this);
-            if (shapePaintPath == nullptr)
-            {
-                continue;
-            }
-            shapePaint->draw(renderer, shapePaintPath, worldTransform());
+            continue;
         }
-    }
-
-    if (clipResult != ClipResult::noClip)
-    {
-        renderer->restore();
+        auto shapePaintPath = shapePaint->pickPath(this);
+        if (shapePaintPath == nullptr)
+        {
+            continue;
+        }
+        shapePaint->draw(renderer,
+                         shapePaintPath,
+                         worldTransform(),
+                         false,
+                         nullptr);
     }
 }
 
@@ -315,6 +320,8 @@ bool Shape::isEmpty()
     }
     return true;
 }
+
+bool Shape::willDraw() { return Super::willDraw() && renderOpacity() != 0.0f; }
 
 // Do constraints need to be marked as dirty too? From tests it doesn't seem
 // they do.

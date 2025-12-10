@@ -31,6 +31,7 @@
 #include "rive/animation/state_machine_input_instance.hpp"
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/shapes/shape.hpp"
+#include "rive/shapes/clipping_shape.hpp"
 #include "rive/text/text_value_run.hpp"
 #include "rive/event.hpp"
 #include "rive/assets/audio_asset.hpp"
@@ -72,6 +73,10 @@ Artboard::~Artboard()
         {
             continue;
         }
+        delete object;
+    }
+    for (auto object : m_invalidObjects)
+    {
         delete object;
     }
 
@@ -136,7 +141,13 @@ bool Artboard::validateObjects()
                 {
                     continue;
                 }
-                delete m_Objects[i];
+                // Instead of immediately deleting invalid objects, we keep them
+                // around in case other objects are referencing them. One
+                // example is the backboard_importer keeping a reference on its
+                // m_FileAssetReferencers. So the invalid objects are taken out
+                // of the objects list but only deleted when the artboard is
+                // destroyed.
+                m_invalidObjects.push_back(m_Objects[i]);
                 m_Objects[i] = nullptr;
             }
         }
@@ -276,6 +287,11 @@ StatusCode Artboard::initialize()
                 break;
             }
         }
+        auto advancingComponent = AdvancingComponent::from(object);
+        if (advancingComponent)
+        {
+            m_advancingComponents.push_back(advancingComponent);
+        }
     }
 
     if (!isInstance())
@@ -342,6 +358,10 @@ StatusCode Artboard::initialize()
                     break;
                 }
             }
+        }
+        else if (object->is<ClippingShape>())
+        {
+            m_clippingShapes.push_back(object->as<ClippingShape>());
         }
     }
     // Iterate over the drawables in order to inject proxies for layouts
@@ -444,6 +464,7 @@ StatusCode Artboard::initialize()
     {
         m_DrawTargets.push_back(static_cast<DrawTarget*>(*itr++));
     }
+    initScriptedObjects();
     return StatusCode::Ok;
 }
 
@@ -539,6 +560,183 @@ void Artboard::sortDrawOrder()
     }
 
     m_FirstDrawable = lastDrawable;
+
+    // Interleave clipping operations between drawables that share the same
+    // common clippings. Each clipping operation has a start and an end.
+    for (auto& clippingShape : m_clippingShapes)
+    {
+        clippingShape->resetDrawables();
+    }
+    Drawable* currentDrawable = m_FirstDrawable;
+    Drawable* nextDrawable = nullptr;
+    std::vector<ClippingShape*> _clippingStack;
+    while (currentDrawable)
+    {
+        currentDrawable->needsSaveOperation(true);
+        auto drawableClippingShapes = currentDrawable->clippingShapes();
+        // Remove all clippings that are not part of the current drawable. Since
+        // they are applied as a stack, if one clipping is removed, all
+        // subsequent clippings from the stack need to be removed as well
+        size_t removingIndex = _clippingStack.size();
+        for (size_t i = 0; i < _clippingStack.size(); ++i)
+        {
+            auto& cl = _clippingStack[i];
+            // Check if this clipping should stay (is in both stack and
+            // drawable's clippings)
+            bool shouldStay = std::find(drawableClippingShapes.begin(),
+                                        drawableClippingShapes.end(),
+                                        cl) != drawableClippingShapes.end();
+            if (!shouldStay)
+            {
+                removingIndex = i;
+                break;
+            }
+        }
+
+        // Remove all clippings from stack in the reverse order they were added
+        if (_clippingStack.size() > 0 && removingIndex < _clippingStack.size())
+        {
+
+            size_t i = _clippingStack.size() - 1;
+            while (i >= removingIndex)
+            {
+                auto& clippingShape = _clippingStack[i];
+                // Insert in the drawing list a clipEnd for each clipping that
+                // is removed
+                auto proxyDrawable =
+                    clippingShape->createProxyDrawable(&clippingShape->clipEnd);
+                if (nextDrawable)
+                {
+                    proxyDrawable->next = nextDrawable;
+                    nextDrawable->prev = proxyDrawable;
+                }
+                else
+                {
+                    fprintf(stderr,
+                            "Error - adding clip end as first operation\n");
+                }
+                proxyDrawable->prev = currentDrawable;
+                currentDrawable->next = proxyDrawable;
+                nextDrawable = proxyDrawable;
+                if (i == 0)
+                {
+                    break;
+                }
+                i--;
+            }
+            _clippingStack.erase(_clippingStack.begin() + removingIndex,
+                                 _clippingStack.end());
+        }
+        // Find clippings that are applied to the drawable but are not on the
+        // stack
+        for (auto& clippingShape : drawableClippingShapes)
+        {
+            auto itr = std::find(_clippingStack.begin(),
+                                 _clippingStack.end(),
+                                 clippingShape);
+            if (itr == _clippingStack.end())
+            {
+                auto proxyDrawable = clippingShape->createProxyDrawable(
+                    &clippingShape->clipStart);
+                if (nextDrawable)
+                {
+                    proxyDrawable->next = nextDrawable;
+                    nextDrawable->prev = proxyDrawable;
+                }
+                else
+                {
+                    m_FirstDrawable = proxyDrawable;
+                }
+                proxyDrawable->prev = currentDrawable;
+                currentDrawable->next = proxyDrawable;
+                nextDrawable = proxyDrawable;
+                _clippingStack.push_back(clippingShape);
+            }
+        }
+        nextDrawable = currentDrawable;
+        currentDrawable = currentDrawable->prev;
+    }
+    // Add closing calls to remaining clippings in the stack
+    if (_clippingStack.size() > 0)
+    {
+
+        for (int i = (int)(_clippingStack.size() - 1); i >= 0; i--)
+        {
+            auto& clippingShape = _clippingStack[i];
+            auto proxyDrawable =
+                clippingShape->createProxyDrawable(&clippingShape->clipEnd);
+            if (nextDrawable)
+            {
+                nextDrawable->prev = proxyDrawable;
+                proxyDrawable->next = nextDrawable;
+            }
+            proxyDrawable->prev = nullptr; // End of list
+            nextDrawable = proxyDrawable;
+        }
+    }
+    clearRedundantOperations();
+}
+
+// Look for drawables that are preceeding and succeeding drawables that call
+// save and restore. If found, the drawable does not need to call save and
+// restore itself.
+void Artboard::clearRedundantOperations()
+{
+    Drawable* currentDrawable = m_FirstDrawable;
+    bool prevAppliedSave = false;
+    // Keep a stack of clipStart operation results to apply the same operation
+    // to its clipEnd
+    std::vector<bool> appliedClippingSaveOperations;
+    while (currentDrawable)
+    {
+        currentDrawable->needsSaveOperation(true);
+        // If previous operation applied a save operation
+        if (prevAppliedSave)
+        {
+            // With consecutive clippings, we can skip the save and restore
+            // operation since the previous one has applied it
+            if (currentDrawable->isClipStart())
+            {
+                appliedClippingSaveOperations.push_back(false);
+                currentDrawable->needsSaveOperation(false);
+            }
+            else if (currentDrawable->isClipEnd())
+            {
+                // Apply or skip the clipEnd Restore operation matching its clip
+                // start counterpart
+                auto operationApplied = appliedClippingSaveOperations.back();
+                appliedClippingSaveOperations.pop_back();
+                currentDrawable->needsSaveOperation(operationApplied);
+            }
+            else
+            {
+                // Check if next is clip end, if it is, we can skip the drawable
+                // save/restore because it is tightly wrapped in a clipping
+                // operation
+                auto nextDrawable = currentDrawable->prev;
+                if (nextDrawable->isClipEnd())
+                {
+                    currentDrawable->needsSaveOperation(false);
+                }
+            }
+        }
+        else if (currentDrawable->isClipStart())
+        {
+            appliedClippingSaveOperations.push_back(true);
+        }
+        else if (currentDrawable->isClipEnd())
+        {
+            // Apply or skip the clipEnd Restore operation matching its clip
+            // start counterpart
+            auto operationApplied = appliedClippingSaveOperations.back();
+            currentDrawable->needsSaveOperation(operationApplied);
+            appliedClippingSaveOperations.pop_back();
+        }
+        prevAppliedSave = currentDrawable->isClipStart() &&
+                          (currentDrawable->willClip() || prevAppliedSave);
+        currentDrawable = currentDrawable->prev;
+    }
+    assert(appliedClippingSaveOperations.size() == 0);
 }
 
 void Artboard::sortDependencies()
@@ -568,6 +766,17 @@ void Artboard::addStateMachine(StateMachine* object)
 void Artboard::addScriptedObject(ScriptedObject* object)
 {
     m_ScriptedObjects.push_back(object);
+}
+
+void Artboard::initScriptedObjects()
+{
+    if (isInstance())
+    {
+        for (auto obj : m_ScriptedObjects)
+        {
+            obj->reinit();
+        }
+    }
 }
 
 Core* Artboard::resolve(uint32_t id) const
@@ -645,9 +854,9 @@ void Artboard::cloneObjectDataBinds(const Core* object,
             auto dataBindClone = static_cast<DataBind*>(dataBind->clone());
             dataBindClone->target(clone);
             dataBindClone->file(dataBind->file());
+            dataBindClone->initialize();
             if (dataBind->converter() != nullptr)
             {
-
                 dataBindClone->converter(
                     dataBind->converter()->clone()->as<DataConverter>());
             }
@@ -758,6 +967,10 @@ void Artboard::update(ComponentDirt value)
     if (hasDirt(value, ComponentDirt::DrawOrder))
     {
         sortDrawOrder();
+    }
+    if (hasDirt(value, ComponentDirt::Clipping))
+    {
+        clearRedundantOperations();
     }
 #ifdef WITH_RIVE_LAYOUT
     if (hasDirt(value, ComponentDirt::LayoutStyle))
@@ -1046,10 +1259,9 @@ bool Artboard::advanceInternal(float elapsedSeconds, AdvanceFlags flags)
 {
     bool didUpdate = false;
 
-    for (auto dep : m_DependencyOrder)
+    for (auto adv : m_advancingComponents)
     {
-        auto adv = AdvancingComponent::from(dep);
-        if (adv != nullptr && adv->advanceComponent(elapsedSeconds, flags))
+        if (adv->advanceComponent(elapsedSeconds, flags))
         {
             didUpdate = true;
         }
@@ -1224,12 +1436,47 @@ void Artboard::draw(Renderer* renderer, DrawOption option)
 
     if (option != DrawOption::kHideFG)
     {
+        // Empty clips is a counter for clipping shapes that are empty, for
+        // example because they are hidden in a solo. If emptyClips > 0, the
+        // drawables should not be drawn.
+        int emptyClips = 0;
+        // We stack clip operations to avoid calling a save + clip + restore on
+        // clipping that don't have any drawables in between. this is a common
+        // case with drawables in solos where the drawables are not drawn.
+        std::vector<Drawable*> pendingClipOperations;
         for (auto drawable = m_FirstDrawable; drawable != nullptr;
              drawable = drawable->prev)
         {
-            if (drawable->isHidden())
+            auto prevClips = emptyClips;
+            emptyClips += drawable->emptyClipCount();
+            if (!drawable->willDraw() || emptyClips != prevClips ||
+                emptyClips > 0)
             {
                 continue;
+            }
+            if (drawable->isClipStart())
+            {
+                pendingClipOperations.push_back(drawable);
+                continue;
+            }
+            else if (pendingClipOperations.size() > 0)
+            {
+                // If there are clip operations pending and the next drawable is
+                // a clip end, the clipping operation does not clip anything and
+                // both can be skipped.
+                if (drawable->isClipEnd())
+                {
+                    pendingClipOperations.pop_back();
+                    continue;
+                }
+                else
+                {
+                    for (auto& pendingClip : pendingClipOperations)
+                    {
+                        pendingClip->draw(renderer);
+                    }
+                    pendingClipOperations.clear();
+                }
             }
             drawable->draw(renderer);
         }
@@ -1251,6 +1498,20 @@ void Artboard::addToRenderPath(RenderPath* path, const Mat2D& transform)
         }
         Shape* shape = drawable->as<Shape>();
         shape->addToRenderPath(path, transform);
+    }
+}
+
+void Artboard::addToRawPath(RawPath& path, const Mat2D* transform)
+{
+    for (auto drawable = m_FirstDrawable; drawable != nullptr;
+         drawable = drawable->prev)
+    {
+        if (drawable->isHidden() || !drawable->is<Shape>())
+        {
+            continue;
+        }
+        Shape* shape = drawable->as<Shape>();
+        shape->addToRawPath(path, transform);
     }
 }
 
@@ -1550,11 +1811,7 @@ void Artboard::internalDataContext(DataContext* value)
     }
     bindDataBindsFromContext(m_DataContext);
     sortDataBinds();
-
-    for (auto obj : m_ScriptedObjects)
-    {
-        obj->reinit();
-    }
+    initScriptedObjects();
 }
 
 void Artboard::rebind() { internalDataContext(m_DataContext); }

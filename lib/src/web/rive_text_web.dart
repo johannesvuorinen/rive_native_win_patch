@@ -403,7 +403,7 @@ class ParagraphWasm extends Paragraph {
     int level = data.getUint8(8);
     List<GlyphRunWasm> runs = [];
     const runSize =
-        68; // see rive_text_bindings.cpp assertSomeAssumptions for explanation
+        76; // see rive_text_bindings.cpp assertSomeAssumptions for explanation
     var runsPointer = data.getUint32(0, Endian.little);
     var runsCount = data.getUint32(4, Endian.little);
 

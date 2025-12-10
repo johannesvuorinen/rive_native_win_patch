@@ -424,6 +424,36 @@ static int vm_namecall(lua_State* L)
                 return vm->pushValue(name,
                                      ViewModelInstanceTriggerBase::typeKey);
             }
+            case (int)LuaAtoms::getString:
+            {
+                size_t namelen = 0;
+                const char* name = luaL_checklstring(L, 2, &namelen);
+                assert(vm->state() == L);
+                return vm->pushValue(name,
+                                     ViewModelInstanceStringBase::typeKey);
+            }
+            case (int)LuaAtoms::getBoolean:
+            {
+                size_t namelen = 0;
+                const char* name = luaL_checklstring(L, 2, &namelen);
+                assert(vm->state() == L);
+                return vm->pushValue(name,
+                                     ViewModelInstanceBooleanBase::typeKey);
+            }
+            case (int)LuaAtoms::getColor:
+            {
+                size_t namelen = 0;
+                const char* name = luaL_checklstring(L, 2, &namelen);
+                assert(vm->state() == L);
+                return vm->pushValue(name, ViewModelInstanceColorBase::typeKey);
+            }
+            case (int)LuaAtoms::getList:
+            {
+                size_t namelen = 0;
+                const char* name = luaL_checklstring(L, 2, &namelen);
+                assert(vm->state() == L);
+                return vm->pushValue(name, ViewModelInstanceListBase::typeKey);
+            }
             default:
                 break;
         }
@@ -1128,6 +1158,6 @@ int luaopen_rive_properties(lua_State* L)
         lua_pop(L, 1); // pop the metatable
     }
 
-    return 9;
+    return 0;
 }
 #endif

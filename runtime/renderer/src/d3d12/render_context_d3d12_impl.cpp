@@ -101,7 +101,7 @@ public:
                                             mipLevel,
                                             DXGI_FORMAT_R8G8B8A8_UNORM,
                                             D3D12_RESOURCE_FLAG_NONE,
-                                            D3D12_RESOURCE_STATE_COPY_DEST))
+                                            D3D12_RESOURCE_STATE_COMMON))
     {
         D3D12_SUBRESOURCE_DATA srcData;
         srcData.pData = imageDataRGBA;
@@ -454,7 +454,7 @@ std::unique_ptr<RenderContext> RenderContextD3D12Impl::MakeContext(
             sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS))))
     {
         d3dCapabilities.supportsRasterizerOrderedViews =
-            d3d12Options.ROVsSupported;
+            d3d12Options.ROVsSupported && !contextOptions.isIntelArc;
         if (d3d12Options.TypedUAVLoadAdditionalFormats)
         {
             // TypedUAVLoadAdditionalFormats is true. Now check if we can
@@ -618,7 +618,7 @@ RenderContextD3D12Impl::RenderContextD3D12Impl(
                                               1,
                                               DXGI_FORMAT_R16_FLOAT,
                                               D3D12_RESOURCE_FLAG_NONE,
-                                              D3D12_RESOURCE_STATE_COPY_DEST);
+                                              D3D12_RESOURCE_STATE_COMMON);
     NAME_D3D12_OBJECT(m_featherTexture);
     auto featherUploadBuffer = m_resourceManager->makeUploadBuffer(
         sizeof(gpu::g_inverseGaussianIntegralTableF16) * 2);
@@ -648,10 +648,6 @@ RenderContextD3D12Impl::RenderContextD3D12Impl(
                        1,
                        1,
                        &updateData2);
-
-    m_resourceManager->transition(copyCommandList,
-                                  m_featherTexture.get(),
-                                  D3D12_RESOURCE_STATE_COMMON);
 }
 
 rcp<RenderBuffer> RenderContextD3D12Impl::makeRenderBuffer(
@@ -992,36 +988,44 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
 
     if (desc.pathCount > 0)
     {
-        m_cpuSrvUavCbvHeap->markSrvToIndex(m_device.Get(),
-                                           m_pathBuffer->resource(),
-                                           PATH_BUFFER_HEAP_OFFSET,
-                                           desc.pathCount,
-                                           sizeof(PathData),
-                                           desc.firstPath);
+        m_cpuSrvUavCbvHeap->markSrvToIndex(
+            m_device.Get(),
+            m_pathBuffer->resource(),
+            PATH_BUFFER_HEAP_OFFSET,
+            desc.pathCount,
+            sizeof(PathData),
+            StorageBufferElementSizeInBytes(PathData::kBufferStructure),
+            desc.firstPath);
 
-        m_cpuSrvUavCbvHeap->markSrvToIndex(m_device.Get(),
-                                           m_paintBuffer->resource(),
-                                           PAINT_BUFFER_HEAP_OFFSET,
-                                           desc.pathCount,
-                                           sizeof(PaintData),
-                                           desc.firstPaint);
+        m_cpuSrvUavCbvHeap->markSrvToIndex(
+            m_device.Get(),
+            m_paintBuffer->resource(),
+            PAINT_BUFFER_HEAP_OFFSET,
+            desc.pathCount,
+            sizeof(PaintData),
+            StorageBufferElementSizeInBytes(PaintData::kBufferStructure),
+            desc.firstPaint);
 
-        m_cpuSrvUavCbvHeap->markSrvToIndex(m_device.Get(),
-                                           m_paintAuxBuffer->resource(),
-                                           PAINT_AUX_BUFFER_HEAP_OFFSET,
-                                           desc.pathCount,
-                                           sizeof(PaintAuxData),
-                                           desc.firstPaintAux);
+        m_cpuSrvUavCbvHeap->markSrvToIndex(
+            m_device.Get(),
+            m_paintAuxBuffer->resource(),
+            PAINT_AUX_BUFFER_HEAP_OFFSET,
+            desc.pathCount,
+            sizeof(PaintAuxData),
+            StorageBufferElementSizeInBytes(PaintAuxData::kBufferStructure),
+            desc.firstPaintAux);
     }
 
     if (desc.contourCount > 0)
     {
-        m_cpuSrvUavCbvHeap->markSrvToIndex(m_device.Get(),
-                                           m_contourBuffer->resource(),
-                                           CONTOUR_BUFFER_HEAP_OFFSET,
-                                           desc.contourCount,
-                                           sizeof(ContourData),
-                                           desc.firstContour);
+        m_cpuSrvUavCbvHeap->markSrvToIndex(
+            m_device.Get(),
+            m_contourBuffer->resource(),
+            CONTOUR_BUFFER_HEAP_OFFSET,
+            desc.contourCount,
+            sizeof(ContourData),
+            StorageBufferElementSizeInBytes(ContourData::kBufferStructure),
+            desc.firstContour);
     }
 
     // copy to gpu heap
@@ -1136,6 +1140,16 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
         m_resourceManager->transition(cmdList,
                                       m_tesselationTexture.get(),
                                       D3D12_RESOURCE_STATE_GENERIC_READ);
+
+        if (m_capabilities.isIntel)
+        {
+            // workaround similiar to d3d11.
+            // Intel needs this which is basically a
+            // "VK_DEPENDENCY_BY_REGION_BIT" pipeline barrier
+            const auto barrier =
+                CD3DX12_RESOURCE_BARRIER::Aliasing(nullptr, nullptr);
+            cmdList->ResourceBarrier(1, &barrier);
+        }
     }
 
     D3D12_VERTEX_BUFFER_VIEW NULL_VIEW;
@@ -1400,15 +1414,6 @@ void RenderContextD3D12Impl::flush(const FlushDescriptor& desc)
             assert(desc.interlockMode == gpu::InterlockMode::atomics);
             shaderMiscFlags |=
                 gpu::ShaderMiscFlags::coalescedResolveAndTransfer;
-        }
-        if (desc.fixedFunctionColorOutput)
-        {
-            shaderMiscFlags |= gpu::ShaderMiscFlags::fixedFunctionColorOutput;
-        }
-        if (desc.interlockMode == gpu::InterlockMode::rasterOrdering &&
-            (batch.drawContents & gpu::DrawContents::clockwiseFill))
-        {
-            shaderMiscFlags |= gpu::ShaderMiscFlags::clockwiseFill;
         }
 
         auto* pipeline = m_pipelineManager.tryGetPipeline(

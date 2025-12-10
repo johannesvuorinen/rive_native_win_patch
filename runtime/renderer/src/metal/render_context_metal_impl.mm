@@ -1513,13 +1513,8 @@ void RenderContextMetalImpl::flush(const FlushDescriptor& desc)
         pass.colorAttachments[COVERAGE_PLANE_IDX].storeAction =
             MTLStoreActionDontCare;
     }
-    else if (desc.fixedFunctionColorOutput)
-    {
-        assert(desc.interlockMode == gpu::InterlockMode::atomics);
-        baselineShaderMiscFlags |=
-            gpu::ShaderMiscFlags::fixedFunctionColorOutput;
-    }
-    else if (desc.colorLoadAction == gpu::LoadAction::preserveRenderTarget)
+    else if (desc.colorLoadAction == gpu::LoadAction::preserveRenderTarget &&
+             !desc.fixedFunctionColorOutput)
     {
         // Since we need to preserve the renderTarget during load, and since
         // we're rendering to an offscreen color buffer, we have to literally
@@ -1570,11 +1565,6 @@ void RenderContextMetalImpl::flush(const FlushDescriptor& desc)
 
         gpu::ShaderMiscFlags batchMiscFlags =
             baselineShaderMiscFlags | batch.shaderMiscFlags;
-        if (desc.interlockMode == gpu::InterlockMode::rasterOrdering &&
-            (batch.drawContents & gpu::DrawContents::clockwiseFill))
-        {
-            batchMiscFlags |= gpu::ShaderMiscFlags::clockwiseFill;
-        }
         if (!(batchMiscFlags & gpu::ShaderMiscFlags::fixedFunctionColorOutput))
         {
             if (batch.drawType == gpu::DrawType::renderPassResolve)

@@ -55,7 +55,8 @@ Mat2D rive::computeAlignment(Fit fit,
         }
         case Fit::layout:
         {
-            return Mat2D::fromScale(scaleFactor, scaleFactor);
+            scaleX = scaleY = scaleFactor;
+            break;
         }
         case Fit::none:
         {
@@ -164,6 +165,7 @@ SimpleArray<Paragraph> Font::shapeText(Span<const Unichar> text,
     GlyphRun* lastRun = nullptr;
     size_t reserveSize = text.size() / 4;
     SimpleArrayBuilder<uint32_t> breakBuilder(reserveSize);
+    SimpleArrayBuilder<uint32_t> joinerBuilder(reserveSize);
     for (const Paragraph& para : paragraphs)
     {
         for (GlyphRun& gr : para.runs)
@@ -171,8 +173,10 @@ SimpleArray<Paragraph> Font::shapeText(Span<const Unichar> text,
             if (lastRun != nullptr)
             {
                 lastRun->breaks = std::move(breakBuilder);
+                lastRun->joiners = std::move(joinerBuilder);
                 // Reset the builder.
                 breakBuilder = SimpleArrayBuilder<uint32_t>(reserveSize);
+                joinerBuilder = SimpleArrayBuilder<uint32_t>(reserveSize);
             }
             uint32_t glyphIndex = 0;
             for (uint32_t offset : gr.textIndices)
@@ -182,6 +186,10 @@ SimpleArray<Paragraph> Font::shapeText(Span<const Unichar> text,
                 {
                     breakBuilder.add(glyphIndex);
                     breakBuilder.add(glyphIndex);
+                }
+                if (unicode == 0x2060)
+                {
+                    joinerBuilder.add(offset);
                 }
                 if (wantWhiteSpace == isWhiteSpace(unicode))
                 {
@@ -207,6 +215,7 @@ SimpleArray<Paragraph> Font::shapeText(Span<const Unichar> text,
             breakBuilder.add((uint32_t)lastRun->glyphs.size());
         }
         lastRun->breaks = std::move(breakBuilder);
+        lastRun->joiners = std::move(joinerBuilder);
     }
 
 #ifdef DEBUG

@@ -145,6 +145,76 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
             break;
         }
 
+        case gpu::InterlockMode::clockwise:
+        {
+#ifndef RIVE_ANDROID
+            switch (drawType)
+            {
+                case DrawType::midpointFanPatches:
+                case DrawType::midpointFanCenterAAPatches:
+                case DrawType::outerCurvePatches:
+                    vertCode = spirv::draw_clockwise_path_vert;
+                    fragCode =
+                        (shaderMiscFlags & gpu::ShaderMiscFlags::clipUpdateOnly)
+                            ? fixedFunctionColorOutput
+                                  ? spirv::draw_clockwise_clip_fixedcolor_frag
+                                  : spirv::draw_clockwise_clip_frag
+                        : fixedFunctionColorOutput
+                            ? spirv::draw_clockwise_path_fixedcolor_frag
+                            : spirv::draw_clockwise_path_frag;
+                    break;
+
+                case DrawType::interiorTriangulation:
+                    vertCode = spirv::draw_clockwise_interior_triangles_vert;
+                    fragCode =
+                        (shaderMiscFlags & gpu::ShaderMiscFlags::clipUpdateOnly)
+                            ? fixedFunctionColorOutput
+                                  ? spirv::
+                                        draw_clockwise_interior_triangles_clip_fixedcolor_frag
+
+                                  : spirv::
+                                        draw_clockwise_interior_triangles_clip_frag
+                        : fixedFunctionColorOutput
+                            ? spirv::
+                                  draw_clockwise_interior_triangles_fixedcolor_frag
+                            : spirv::draw_clockwise_interior_triangles_frag;
+                    break;
+
+                case DrawType::atlasBlit:
+                    vertCode = spirv::draw_clockwise_atlas_blit_vert;
+                    fragCode =
+                        fixedFunctionColorOutput
+                            ? spirv::draw_clockwise_atlas_blit_fixedcolor_frag
+                            : spirv::draw_clockwise_atlas_blit_frag;
+                    break;
+
+                case DrawType::imageMesh:
+                    vertCode = spirv::draw_clockwise_image_mesh_vert;
+                    fragCode =
+                        fixedFunctionColorOutput
+                            ? spirv::draw_clockwise_image_mesh_fixedcolor_frag
+                            : spirv::draw_clockwise_image_mesh_frag;
+                    break;
+
+                case DrawType::imageRect:
+                case DrawType::msaaStrokes:
+                case DrawType::msaaMidpointFanBorrowedCoverage:
+                case DrawType::msaaMidpointFans:
+                case DrawType::msaaMidpointFanStencilReset:
+                case DrawType::msaaMidpointFanPathsStencil:
+                case DrawType::msaaMidpointFanPathsCover:
+                case DrawType::msaaOuterCubics:
+                case DrawType::msaaStencilClipReset:
+                case DrawType::renderPassResolve:
+                case DrawType::renderPassInitialize:
+                    RIVE_UNREACHABLE();
+            }
+            break;
+#else
+            RIVE_UNREACHABLE();
+#endif
+        }
+
         case gpu::InterlockMode::clockwiseAtomic:
         {
             switch (drawType)
@@ -248,20 +318,19 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                     // MSAA render passes get initialized by drawing the
                     // previous contents into the framebuffer.
                     // (LoadAction::preserveRenderTarget only.)
-                    vertCode = spirv::copy_attachment_to_attachment_vert;
+                    vertCode = spirv::draw_fullscreen_quad_vert;
                     fragCode = spirv::copy_attachment_to_attachment_frag;
                     break;
 
-                case DrawType::imageRect:
                 case DrawType::renderPassResolve:
+                    vertCode = spirv::draw_fullscreen_quad_vert;
+                    fragCode = spirv::draw_msaa_resolve_frag;
+                    break;
+
+                case DrawType::imageRect:
                     RIVE_UNREACHABLE();
             }
             break;
-        }
-
-        case gpu::InterlockMode::clockwise:
-        {
-            RIVE_UNREACHABLE();
         }
     }
 

@@ -1006,16 +1006,16 @@ void RenderContextGLImpl::resizeAtlasTexture(uint32_t width, uint32_t height)
 
 void RenderContextGLImpl::resizeTransientPLSBacking(uint32_t width,
                                                     uint32_t height,
-                                                    uint32_t depth)
+                                                    uint32_t planeCount)
 {
     if (m_plsImpl != nullptr)
     {
-        m_plsImpl->resizeTransientPLSBacking(width, height, depth);
+        m_plsImpl->resizeTransientPLSBacking(width, height, planeCount);
     }
     else
     {
         // If we don't support PLS we better not be allocating a backing for it.
-        assert((width | height | depth) == 0);
+        assert((width | height | planeCount) == 0);
     }
 }
 
@@ -2072,11 +2072,6 @@ void RenderContextGLImpl::flush(const FlushDescriptor& desc)
             assert(m_plsImpl != nullptr);
             shaderMiscFlags |= m_plsImpl->shaderMiscFlags(desc, drawType);
         }
-        if (desc.interlockMode == gpu::InterlockMode::rasterOrdering &&
-            (batch.drawContents & gpu::DrawContents::clockwiseFill))
-        {
-            shaderMiscFlags |= gpu::ShaderMiscFlags::clockwiseFill;
-        }
         const DrawProgram* drawProgram = m_pipelineManager.tryGetPipeline(
             {
                 .drawType = drawType,
@@ -2160,8 +2155,10 @@ void RenderContextGLImpl::flush(const FlushDescriptor& desc)
                      draw = draw->nextDstRead())
                 {
                     assert(draw->blendMode() != BlendMode::srcOver);
-                    glutils::BlitFramebuffer(draw->pixelBounds(),
-                                             renderTarget->height());
+                    glutils::BlitFramebuffer(
+                        desc.renderTargetUpdateBounds.intersect(
+                            draw->pixelBounds()),
+                        renderTarget->height());
                 }
                 renderTarget->bindMSAAFramebuffer(this, desc.msaaSampleCount);
             }
@@ -2926,7 +2923,7 @@ std::unique_ptr<RenderContext> RenderContextGLImpl::MakeContext(
             // severe visual artifacts.
             // Require this workaround before the earliest known good driver,
             // which is 1.11.
-            capabilities.needsPixelLocalStorage2 = true;
+            capabilities.usePixelLocalStorage2AsWorkaround = true;
         }
     }
 

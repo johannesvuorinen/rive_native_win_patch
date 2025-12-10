@@ -34,7 +34,7 @@ bool usePLS = true;
                   registerWith:(NSObject<FlutterTextureRegistry>*)registry
 {
     self = [super init];
-    _riveRenderer = nil;
+    _riveRenderer = nullptr;
     if (self)
     {
         _width = width;
@@ -262,18 +262,17 @@ void preCommitCallback(id<MTLCommandBuffer> commandBuffer,
         CFRetain(textureRegistry);
     }
 
-    auto rt = (__bridge RiveNativeRenderTexture*)nativeRenderTexture;
-    auto flutterTextureRegistry =
-        (__bridge NSObject<FlutterTextureRegistry>*)textureRegistry;
-
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull cb) {
       @autoreleasepool
       {
-          riveLock();
+          // Bridge to Obj-C references. CFRetain kept them alive until now.
+          auto rt = (__bridge RiveNativeRenderTexture*)nativeRenderTexture;
+          auto flutterTextureRegistry =
+              (__bridge NSObject<FlutterTextureRegistry>*)textureRegistry;
+
           // Guard: renderer might have been destroyed during teardown.
-          if (rt == nil || rt->_riveRenderer == nil)
+          if (!rt || !flutterTextureRegistry)
           {
-              riveUnlock();
               if (nativeRenderTexture)
               {
                   CFRelease(nativeRenderTexture);
@@ -284,18 +283,31 @@ void preCommitCallback(id<MTLCommandBuffer> commandBuffer,
               }
               return;
           }
-          rt->_readWriteRing.nextRead();
-          [flutterTextureRegistry textureFrameAvailable:[rt flutterTextureId]];
-          riveUnlock();
 
-          if (nativeRenderTexture)
-          {
-              CFRelease(nativeRenderTexture);
-          }
-          if (textureRegistry)
-          {
-              CFRelease(textureRegistry);
-          }
+          // Textures must be managed on the platform (main) thread
+          // https://api.flutter.dev/ios-embedder/protocol_flutter_texture_registry-p.html
+          // See issue:
+          // https://github.com/flutter-webrtc/flutter-webrtc/issues/1914
+          dispatch_async(dispatch_get_main_queue(), ^{
+            riveLock();
+            if (rt->_riveRenderer != nullptr)
+            {
+                rt->_readWriteRing.nextRead();
+                [flutterTextureRegistry
+                    textureFrameAvailable:[rt flutterTextureId]];
+            }
+            riveUnlock();
+
+            // Release the temp retains now that we're done with Obj-C
+            if (nativeRenderTexture)
+            {
+                CFRelease(nativeRenderTexture);
+            }
+            if (textureRegistry)
+            {
+                CFRelease(textureRegistry);
+            }
+          });
       }
     }];
 }

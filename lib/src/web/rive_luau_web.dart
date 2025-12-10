@@ -54,13 +54,26 @@ late js.JSFunction _riveLuaScriptedDataValueType;
 late js.JSFunction _riveLuaScriptedDataValueNumberValue;
 late js.JSFunction _riveLuaScriptedDataValueStringValue;
 late js.JSFunction _riveLuaScriptedDataValueBooleanValue;
+late js.JSFunction _riveLuaScriptedDataValueColorValue;
 late js.JSFunction _riveLuaPushDataValueNumber;
 late js.JSFunction _riveLuaPushDataValueString;
 late js.JSFunction _riveLuaPushDataValueBoolean;
+late js.JSFunction _riveLuaPushDataValueColor;
 late js.JSFunction _riveLuaToDataValue;
+late js.JSFunction _riveLuaToPath;
+late js.JSFunction _riveLuaPushPath;
+late js.JSFunction _riveLuaRenderPath;
 late js.JSFunction _riveLuaRegisterStateWithFile;
 late js.JSFunction _riveLuaPushVector;
 late js.JSFunction _riveLuaToVector;
+late js.JSFunction _riveLuaPushPointerEvent;
+late js.JSFunction _riveLuaPointerEventHitResult;
+late js.JSFunction _riveLuaCreateTable;
+late js.JSFunction _riveLuaRemove;
+late js.JSFunction _riveLuaSetMetaTable;
+late js.JSFunction _riveLuaEqual;
+late js.JSFunction _riveLuaLessThan;
+late js.JSFunction _riveLuaWhere;
 
 bool _wasmBool(js.JSAny? value) => (value as js.JSNumber).toDartInt == 1;
 
@@ -116,16 +129,33 @@ class LuauStateWasm extends LuauState {
         module['_riveLuaScriptedDataValueStringValue'] as js.JSFunction;
     _riveLuaScriptedDataValueBooleanValue =
         module['_riveLuaScriptedDataValueBooleanValue'] as js.JSFunction;
+    _riveLuaScriptedDataValueColorValue =
+        module['_riveLuaScriptedDataValueColorValue'] as js.JSFunction;
     _riveLuaPushDataValueNumber =
         module['_riveLuaPushDataValueNumber'] as js.JSFunction;
     _riveLuaPushDataValueString =
         module['_riveLuaPushDataValueString'] as js.JSFunction;
     _riveLuaPushDataValueBoolean =
         module['_riveLuaPushDataValueBoolean'] as js.JSFunction;
+    _riveLuaPushDataValueColor =
+        module['_riveLuaPushDataValueColor'] as js.JSFunction;
     _riveLuaToDataValue = module['_riveLuaDataValue'] as js.JSFunction;
+    _riveLuaToPath = module['_riveLuaPath'] as js.JSFunction;
+    _riveLuaPushPath = module['_riveLuaPushPath'] as js.JSFunction;
+    _riveLuaRenderPath = module['_riveLuaRenderPath'] as js.JSFunction;
     _riveLuaRegisterStateWithFile = module['_setScriptingVM'] as js.JSFunction;
     _riveLuaPushVector = module['_lua_pushvector2'] as js.JSFunction;
     _riveLuaToVector = module['_lua_tovector'] as js.JSFunction;
+    _riveLuaPushPointerEvent =
+        module['_riveLuaPushPointerEvent'] as js.JSFunction;
+    _riveLuaPointerEventHitResult =
+        module['_riveLuaPointerEventHitResult'] as js.JSFunction;
+    _riveLuaCreateTable = module['_lua_createtable'] as js.JSFunction;
+    _riveLuaRemove = module['_lua_remove'] as js.JSFunction;
+    _riveLuaSetMetaTable = module['_lua_setmetatable'] as js.JSFunction;
+    _riveLuaEqual = module['_lua_equal'] as js.JSFunction;
+    _riveLuaLessThan = module['_lua_lessthan'] as js.JSFunction;
+    _riveLuaWhere = module['_luaL_where'] as js.JSFunction;
   }
 
   js.JSAny _nativePtr = 0.toJS;
@@ -470,9 +500,20 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
+  ScriptedDataValue pushDataValueColor(int value) {
+    final nativeDataValueColor = _riveLuaPushDataValueColor.callAsFunction(
+        null, _nativePtr, value.toJS) as js.JSAny;
+    return ScriptedDataValueWasm(nativeDataValueColor);
+  }
+
+  @override
   ScriptedDataValue dataValueAt(int index) => ScriptedDataValueWasm(
       _riveLuaToDataValue.callAsFunction(null, _nativePtr, index.toJS)
           as js.JSAny);
+
+  @override
+  ScriptedPath pathAt(int index) => ScriptedPathWasm(_nativePtr,
+      _riveLuaToPath.callAsFunction(null, _nativePtr, index.toJS) as js.JSAny);
 
   @override
   void pushVector(Vec2D value) => _riveLuaPushVector.callAsFunction(
@@ -485,6 +526,45 @@ class LuauStateWasm extends LuauState {
         .toDartInt;
     final content = RiveWasm.heapViewF32(pointer, 2);
     return Vec2D.fromValues(content[0], content[1]);
+  }
+
+  @override
+  PointerEvent pushPointerEvent(int id, Vec2D position) => PointerEventWeb(
+        _riveLuaPushPointerEvent.callAsFunction(
+                null, _nativePtr, id.toJS, position.x.toJS, position.y.toJS)
+            as js.JSNumber,
+      );
+
+  @override
+  void createTable({int arraySize = 0, int recordCount = 0}) =>
+      _riveLuaCreateTable.callAsFunction(
+          null, _nativePtr, arraySize.toJS, recordCount.toJS);
+
+  @override
+  void remove(int index) =>
+      _riveLuaRemove.callAsFunction(null, _nativePtr, index.toJS);
+
+  @override
+  void setMetaTable(int index) =>
+      _riveLuaSetMetaTable.callAsFunction(null, _nativePtr, index.toJS);
+
+  @override
+  bool equal(int index1, int index2) => _wasmBool(
+      _riveLuaEqual.callAsFunction(null, _nativePtr, index1.toJS, index2.toJS));
+
+  @override
+  bool lessThan(int index1, int index2) => _wasmBool(_riveLuaLessThan
+      .callAsFunction(null, _nativePtr, index1.toJS, index2.toJS));
+
+  @override
+  void where(int level) =>
+      _riveLuaWhere.callAsFunction(null, _nativePtr, level.toJS);
+
+  @override
+  void pushPath(RenderPath path) {
+    final webRenderPath = path as WebRenderPath;
+    _riveLuaPushPath.callAsFunction(null, _nativePtr,
+        webRenderPath.riveFactory.pointer, webRenderPath.pointer);
   }
 }
 
@@ -501,8 +581,35 @@ class ScriptedRendererWasm extends ScriptedRenderer {
 LuauState makeLuauState(Factory riveFactory) =>
     LuauStateWasm(riveFactory as WebFactory);
 
+class PointerEventWeb extends PointerEvent {
+  final js.JSAny pointer;
+  PointerEventWeb(this.pointer);
+  @override
+  HitResult get hitResult => HitResult.values[(_riveLuaPointerEventHitResult
+          .callAsFunction(null, pointer) as js.JSNumber)
+      .toDartInt];
+}
+
+class ScriptedPathWasm extends ScriptedPath {
+  final js.JSAny statePtr;
+  final js.JSAny pointer;
+  ScriptedPathWasm(this.statePtr, this.pointer);
+
+  @override
+  RenderPath? renderPath(
+    RenderPath path,
+  ) {
+    final riveFactory = (path as WebRenderPath).riveFactory;
+    final renderPathPointer = (_riveLuaRenderPath.callAsFunction(
+        null, statePtr, pointer) as js.JSNumber);
+    final webRenderPath =
+        WebRenderPath.fromPointer(riveFactory, renderPathPointer);
+    return webRenderPath;
+  }
+}
+
 class ScriptedDataValueWasm extends ScriptedDataValue {
-  js.JSAny pointer;
+  final js.JSAny pointer;
   ScriptedDataValueWasm(this.pointer);
 
   @override
@@ -537,5 +644,14 @@ class ScriptedDataValueWasm extends ScriptedDataValue {
       null,
       pointer,
     ));
+  }
+
+  @override
+  int colorValue() {
+    return (_riveLuaScriptedDataValueColorValue.callAsFunction(
+      null,
+      pointer,
+    ) as js.JSNumber)
+        .toDartInt;
   }
 }

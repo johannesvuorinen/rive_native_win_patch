@@ -70,12 +70,36 @@ int Function(Pointer<Void> workspace, Pointer<Utf8> source) _format = _nativeLib
     .asFunction();
 
 int Function(Pointer<Void> workspace, Pointer<Utf8> source, bool failOnErrors,
-        bool compileDependencies) _compile =
+        bool compileDependencies, int, int) _compile =
     _nativeLib
         .lookup<
             NativeFunction<
-                Uint64 Function(Pointer<Void>, Pointer<Utf8>, Bool,
-                    Bool)>>('scriptingWorkspaceCompile')
+                Uint64 Function(Pointer<Void>, Pointer<Utf8>, Bool, Bool, Uint8,
+                    Uint8)>>('scriptingWorkspaceCompile')
+        .asFunction();
+
+int Function(Pointer<Void> workspace, Pointer<Uint8> sourcesAndKey,
+        int sourcesAndKeySize, bool failOnErrors, int, int) _compileAndSign =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Uint64 Function(Pointer<Void>, Pointer<Uint8>, Size, Bool,
+                    Uint8, Uint8)>>('scriptingWorkspaceCompileAndSign')
+        .asFunction();
+
+int Function(
+        Pointer<Void> workspace,
+        Pointer<Uint8> inclusionSetAndQuery,
+        int inclusionSetAndQuerySize,
+        bool caseSensitive,
+        bool matchWholeWord,
+        bool regularExpression,
+        bool trim) _findInFiles =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Uint64 Function(Pointer<Void>, Pointer<Uint8>, Size, Bool, Bool,
+                    Bool, Bool)>>('scriptingWorkspaceFindInFiles')
         .asFunction();
 
 int Function(Pointer<Void> workspace, Pointer<Utf8> source) _implementedType =
@@ -123,6 +147,22 @@ int Function(
               Uint32 line,
               Uint32 column,
             )>>('scriptingWorkspaceRequestAutocomplete')
+    .asFunction();
+
+int Function(
+  Pointer<Void>,
+  Pointer<Utf8> scriptName,
+  int line,
+  int column,
+) _scriptingWorkspaceRequestGetDefinition = _nativeLib
+    .lookup<
+        NativeFunction<
+            Uint64 Function(
+              Pointer<Void>,
+              Pointer<Utf8> scriptName,
+              Uint32 line,
+              Uint32 column,
+            )>>('scriptingWorkspaceRequestGetDefinition')
     .asFunction();
 
 HighlightBuffer Function(Pointer<Void>, Pointer<Utf8> scriptName, int row)
@@ -229,6 +269,22 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   }
 
   @override
+  Future<DefinitionResult> getDefinition(
+    String scriptName,
+    ScriptPosition position,
+  ) {
+    final scriptNameNative = scriptName.toNativeUtf8(allocator: calloc);
+    final workId = _scriptingWorkspaceRequestGetDefinition(
+      _nativeWorkspace,
+      scriptNameNative,
+      position.line,
+      position.column,
+    );
+    calloc.free(scriptNameNative);
+    return registerCompleter(workId);
+  }
+
+  @override
   Future<ImplementedType?> implementedType(String scriptName) {
     final scriptNameNative = scriptName.toNativeUtf8(allocator: calloc);
     final workId = _implementedType(_nativeWorkspace, scriptNameNative);
@@ -301,12 +357,69 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   }
 
   @override
-  Future<CompileResult?> compile(String scriptName,
-      {bool failOnErrors = false, bool compileDependencies = false}) async {
+  Future<CompileResult?> compile(
+    String scriptName, {
+    bool failOnErrors = false,
+    bool compileDependencies = false,
+    OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+    DebugLevel debugLevel = DebugLevel.medium,
+  }) async {
     final sourceNative = toNativeString(scriptName);
-    final workId = _compile(
-        _nativeWorkspace, sourceNative, failOnErrors, compileDependencies);
+    final workId = _compile(_nativeWorkspace, sourceNative, failOnErrors,
+        compileDependencies, optimizationLevel.index, debugLevel.index);
 
+    return registerCompleter(workId);
+  }
+
+  @override
+  Future<CompileAndSignResult?> compileAndSign(
+    Iterable<String> scriptNames,
+    Uint8List privateKey, {
+    bool failOnErrors = false,
+    OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+    DebugLevel debugLevel = DebugLevel.medium,
+  }) {
+    assert(privateKey.length == 64, "private key must be 64 bytes long");
+    final writer = BinaryWriter();
+    writer.writeVarUint(scriptNames.length);
+    for (final name in scriptNames) {
+      writer.writeString(name);
+    }
+    writer.writeVarUint(privateKey.length);
+    writer.write(privateKey);
+    final buffer = writer.uint8Buffer;
+    final memory = calloc.allocate<Uint8>(buffer.length);
+    memory.asTypedList(buffer.length).setAll(0, buffer);
+
+    final workId = _compileAndSign(_nativeWorkspace, memory, buffer.length,
+        failOnErrors, optimizationLevel.index, debugLevel.index);
+    calloc.free(memory);
+    return registerCompleter(workId);
+  }
+
+  @override
+  Future<FindInFilesResult> findInFiles(
+    Iterable<String>? inclusionSet,
+    String query, {
+    bool caseSensitive = false,
+    bool matchWholeWord = false,
+    bool regularExpression = false,
+    bool trim = false,
+  }) {
+    final writer = BinaryWriter();
+    final inclusionList = inclusionSet?.toList() ?? [];
+    writer.writeVarUint(inclusionList.length);
+    for (final name in inclusionList) {
+      writer.writeString(name);
+    }
+    writer.writeString(query);
+    final buffer = writer.uint8Buffer;
+    final memory = calloc.allocate<Uint8>(buffer.length);
+    memory.asTypedList(buffer.length).setAll(0, buffer);
+
+    final workId = _findInFiles(_nativeWorkspace, memory, buffer.length,
+        caseSensitive, matchWholeWord, regularExpression, trim);
+    calloc.free(memory);
     return registerCompleter(workId);
   }
 

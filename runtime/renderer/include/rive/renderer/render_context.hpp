@@ -348,7 +348,7 @@ private:
         size_t atlasTextureHeight = 0;
         size_t plsTransientBackingWidth = 0;
         size_t plsTransientBackingHeight = 0;
-        size_t plsTransientBackingDepth = 0;
+        size_t plsTransientBackingPlaneCount = 0;
         size_t plsAtomicCoverageBackingWidth = 0;  // atomic mode only.
         size_t plsAtomicCoverageBackingHeight = 0; // atomic mode only.
         size_t coverageBufferLength = 0;           // clockwiseAtomic mode only.
@@ -567,7 +567,7 @@ private:
             uint32_t maxTessTextureHeight = 0;
             uint32_t maxAtlasWidth = 0;
             uint32_t maxAtlasHeight = 0;
-            uint32_t maxPLSTransientBackingDepth = 0;
+            uint32_t maxPLSTransientBackingPlaneCount = 0;
             size_t maxCoverageBufferLength = 0;
         };
 
@@ -776,8 +776,9 @@ private:
         // gpu::DrawBatch objects during writeResources().
         std::vector<DrawUniquePtr> m_draws;
         IAABB m_combinedDrawBounds;
+        gpu::DrawContents m_combinedDrawContents;
 
-        // Layout state.
+        // State computed during layout.
         uint32_t m_pathPaddingCount;
         uint32_t m_paintPaddingCount;
         uint32_t m_paintAuxPaddingCount;
@@ -787,13 +788,17 @@ private:
         uint32_t m_outerCubicTessEndLocation;
         uint32_t m_outerCubicTessVertexIdx;
         uint32_t m_midpointFanTessVertexIdx;
-
         gpu::GradTextureLayout m_gradTextureLayout;
+        gpu::ShaderMiscFlags m_baselineShaderMiscFlags;
 
         gpu::FlushDescriptor m_flushDesc;
 
         BlockAllocatedLinkedList<DrawBatch> m_drawList;
-        gpu::DrawContents m_combinedDrawContents;
+        const DrawBatch* m_firstDstBlendBarrier;
+        // Final "next" pointer in the list of DrawBatches that have dstBlend
+        // barriers.
+        const DrawBatch** m_dstBlendBarrierListTail;
+
         gpu::ShaderFeatures m_combinedShaderFeatures;
 
         // Most recent path and contour state.

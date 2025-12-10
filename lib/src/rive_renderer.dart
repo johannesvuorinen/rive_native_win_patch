@@ -85,7 +85,7 @@ abstract class TrimPathEffect {
   void invalidate();
   void dispose();
 
-  RenderPath effectPath(RenderPath path);
+  RenderPath effectPath(RenderPath path, int shapePaintType);
 }
 
 abstract class DashPathEffect {

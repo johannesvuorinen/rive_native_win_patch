@@ -12,6 +12,8 @@ int luaopen_rive_renderer_library(lua_State* L);
 int luaopen_rive_properties(lua_State* L);
 int luaopen_rive_artboards(lua_State* L);
 int luaopen_rive_data_values(lua_State* L);
+int luaopen_rive_input(lua_State* L);
+int luaopen_rive_contex(lua_State* L);
 
 std::unordered_map<std::string, int16_t> atoms = {
     {"length", (int16_t)LuaAtoms::length},
@@ -26,8 +28,11 @@ std::unordered_map<std::string, int16_t> atoms = {
     {"quadTo", (int16_t)LuaAtoms::quadTo},
     {"cubicTo", (int16_t)LuaAtoms::cubicTo},
     {"close", (int16_t)LuaAtoms::close},
+    {"type", (int16_t)LuaAtoms::type},
     {"reset", (int16_t)LuaAtoms::reset},
     {"add", (int16_t)LuaAtoms::add},
+    {"contours", (int16_t)LuaAtoms::contours},
+    {"measure", (int16_t)LuaAtoms::measure},
     {"invert", (int16_t)LuaAtoms::invert},
     {"isIdentity", (int16_t)LuaAtoms::isIdentity},
     {"width", (int16_t)LuaAtoms::width},
@@ -76,8 +81,16 @@ std::unordered_map<std::string, int16_t> atoms = {
     {"restore", (int16_t)LuaAtoms::restore},
     {"transform", (int16_t)LuaAtoms::transform},
     {"value", (int16_t)LuaAtoms::value},
+    {"red", (int16_t)LuaAtoms::red},
+    {"green", (int16_t)LuaAtoms::green},
+    {"blue", (int16_t)LuaAtoms::blue},
+    {"alpha", (int16_t)LuaAtoms::alpha},
     {"getNumber", (int16_t)LuaAtoms::getNumber},
     {"getTrigger", (int16_t)LuaAtoms::getTrigger},
+    {"getString", (int16_t)LuaAtoms::getString},
+    {"getBoolean", (int16_t)LuaAtoms::getBoolean},
+    {"getColor", (int16_t)LuaAtoms::getColor},
+    {"getList", (int16_t)LuaAtoms::getList},
     {"addListener", (int16_t)LuaAtoms::addListener},
     {"removeListener", (int16_t)LuaAtoms::removeListener},
     {"fire", (int16_t)LuaAtoms::fire},
@@ -86,9 +99,34 @@ std::unordered_map<std::string, int16_t> atoms = {
     {"frameOrigin", (int16_t)LuaAtoms::frameOrigin},
     {"data", (int16_t)LuaAtoms::data},
     {"instance", (int16_t)LuaAtoms::instance},
+    {"bounds", (int16_t)LuaAtoms::bounds},
+    {"pointerDown", (int16_t)LuaAtoms::pointerDown},
+    {"pointerUp", (int16_t)LuaAtoms::pointerUp},
+    {"pointerMove", (int16_t)LuaAtoms::pointerMove},
+    {"pointerExit", (int16_t)LuaAtoms::pointerExit},
     {"isNumber", (int16_t)LuaAtoms::isNumber},
     {"isString", (int16_t)LuaAtoms::isString},
     {"isBoolean", (int16_t)LuaAtoms::isBoolean},
+    {"isColor", (int16_t)LuaAtoms::isColor},
+    {"hit", (int16_t)LuaAtoms::hit},
+    {"id", (int16_t)LuaAtoms::id},
+    {"position", (int16_t)LuaAtoms::position},
+    {"rotation", (int16_t)LuaAtoms::rotation},
+    {"scale", (int16_t)LuaAtoms::scale},
+    {"worldTransform", (int16_t)LuaAtoms::worldTransform},
+    {"scaleX", (int16_t)LuaAtoms::scaleX},
+    {"scaleY", (int16_t)LuaAtoms::scaleY},
+    {"decompose", (int16_t)LuaAtoms::decompose},
+    {"children", (int16_t)LuaAtoms::children},
+    {"parent", (int16_t)LuaAtoms::parent},
+    {"node", (int16_t)LuaAtoms::node},
+    {"addToPath", (int16_t)LuaAtoms::addToPath},
+    {"positionAndTangent", (int16_t)LuaAtoms::positionAndTangent},
+    {"warp", (int16_t)LuaAtoms::warp},
+    {"extract", (int16_t)LuaAtoms::extract},
+    {"next", (int16_t)LuaAtoms::next},
+    {"isClosed", (int16_t)LuaAtoms::isClosed},
+    {"markNeedsUpdate", (int16_t)LuaAtoms::markNeedsUpdate},
 };
 
 static const luaL_Reg lualibs[] = {
@@ -96,12 +134,18 @@ static const luaL_Reg lualibs[] = {
     {LUA_TABLIBNAME, luaopen_table},
     {LUA_MATHLIBNAME, luaopen_math},
     {"rive", luaopen_rive_base},
+    {LUA_OSLIBNAME, luaopen_os},
     {LUA_STRLIBNAME, luaopen_string},
+    {LUA_UTF8LIBNAME, luaopen_utf8},
+    {LUA_BUFFERLIBNAME, luaopen_buffer},
+    {LUA_BITLIBNAME, luaopen_bit32},
     {"math", luaopen_rive_math},
     {"renderer", luaopen_rive_renderer_library},
     {"properties", luaopen_rive_properties},
     {"artboard", luaopen_rive_artboards},
     {"dataValue", luaopen_rive_data_values},
+    {"input", luaopen_rive_input},
+    {"context", luaopen_rive_contex},
     {NULL, NULL},
 };
 
@@ -346,17 +390,13 @@ static bool push_module(lua_State* L, const char* name, Span<uint8_t> bytecode)
 
     // add ML result to L stack
     lua_xmove(ML, L, 1);
+    // An error occurred if the top of the stack is a string.
     if (lua_isstring(L, -1))
     {
         ScriptingContext* context =
             static_cast<ScriptingContext*>(lua_getthreaddata(L));
         context->printError(L);
-        fprintf(stderr,
-                "Failed to load module %s '%s'\n",
-                name,
-                lua_tostring(L, -1));
-        lua_pop(L, 1);
-        lua_remove(L, -2);
+        lua_pop(L, 2);
         return false;
     }
     // remove ML thread from L stack

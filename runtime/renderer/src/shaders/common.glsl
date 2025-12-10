@@ -224,6 +224,27 @@ INLINE half min_value(half4 min4)
 
 INLINE float manhattan_width(float2 x) { return abs(x.x) + abs(x.y); }
 
+// ARM Mali has experienced multiple errors for us when calling clamp(), in both
+// GL and Vulkan.
+INLINE half safe_clamp_for_mali(half x, half lo, half hi)
+{
+#if defined(@GL_RENDERER_MALI) || defined(@VULKAN_VENDOR_ID)
+#ifdef @VULKAN_VENDOR_ID
+    if (@VULKAN_VENDOR_ID == VULKAN_VENDOR_ARM)
+#endif
+    {
+        if (x < hi)
+            if (x > lo)
+                return x;
+            else
+                return lo;
+        else
+            return hi;
+    }
+#endif // @GL_RENDERER_MALI || @VULKAN_VENDOR_ID
+    return clamp(x, lo, hi);
+}
+
 #ifndef $UNIFORM_DEFINITIONS_AUTO_GENERATED
 UNIFORM_BLOCK_BEGIN(FLUSH_UNIFORM_BUFFER_IDX, @FlushUniforms)
 float gradInverseViewportY;
@@ -302,9 +323,17 @@ INLINE float normalize_z_index(uint zIndex)
 #ifdef @ENABLE_CLIP_RECT
 INLINE void set_clip_rect_plane_distances(float2x2 clipRectInverseMatrix,
                                           float2 clipRectInverseTranslate,
-                                          float2 pixelPosition)
+                                          float2 pixelPosition
+                                              CLIP_CONTEXT_FORWARD)
 {
-    if (clipRectInverseMatrix != float2x2(0))
+// MSAA uses gl_ClipDistance when ENABLE_CLIP_RECT is set, but since SPIRV uses
+// specialization constants (as opposed to compile-time flags), it means that
+// the usage of them is in the compiled shader even if that codepath is not
+// going to be taken, which ends up as a validation failure on systems that do
+// not support that extension. In those cases, we compile separate SPIRV
+// binaries with gl_ClipDistance explicitly disabled.
+#ifndef @DISABLE_CLIP_DISTANCE_FOR_UBERSHADERS
+    if (any(notEqual(float4(clipRectInverseMatrix), float4(.0, .0, .0, .0))))
     {
         float2 clipRectCoord = MUL(clipRectInverseMatrix, pixelPosition) +
                                clipRectInverseTranslate.xy;
@@ -321,6 +350,7 @@ INLINE void set_clip_rect_plane_distances(float2x2 clipRectInverseMatrix,
         gl_ClipDistance[0] = gl_ClipDistance[1] = gl_ClipDistance[2] =
             gl_ClipDistance[3] = clipRectInverseTranslate.x - .5;
     }
+#endif // !@DISABLE_CLIP_DISTANCE_FOR_UBERSHADERS
 }
 #endif // ENABLE_CLIP_RECT
 
@@ -329,20 +359,20 @@ INLINE void set_clip_rect_plane_distances(float2x2 clipRectInverseMatrix,
 
 #ifdef @FRAGMENT
 #ifdef @NEEDS_GAMMA_CORRECTION
-half gamma_to_linear(half color)
+INLINE half gamma_to_linear(half color)
 {
     return (color <= 0.04045) ? color / 12.92
                               : pow(abs((color + 0.055) / 1.055), 2.4);
 }
 
-half3 gamma_to_linear(half3 color)
+INLINE half3 gamma_to_linear(half3 color)
 {
     return make_half3(gamma_to_linear(color.r),
                       gamma_to_linear(color.g),
                       gamma_to_linear(color.b));
 }
 
-half4 gamma_to_linear(half4 color)
+INLINE half4 gamma_to_linear(half4 color)
 {
     return make_half4(gamma_to_linear(color.rgb), color.a);
 }
@@ -366,3 +396,30 @@ uint zIndex;
 UNIFORM_BLOCK_END(imageDrawUniforms)
 #endif
 #endif
+
+// The Qualcomm compiler can't handle line breaks in #ifs.
+// clang-format off
+#if defined(@FRAGMENT) && defined(@RENDER_MODE_MSAA) && !defined(@FIXED_FUNCTION_COLOR_OUTPUT)
+// clang-format on
+INLINE half4 dst_color_fetch(half4x4 dstSamples, int sampleMask)
+{
+    if (sampleMask == 0xf)
+    {
+        // Average together all samples for this fragment.
+        return (dstSamples[0] + dstSamples[1] + dstSamples[2] + dstSamples[3]) *
+               .25;
+    }
+    else
+    {
+        // Average together only the samples that are inside the sample mask.
+        half4 mask = float4(notEqual(sampleMask & int4(1, 2, 4, 8), int4(0)));
+        half4 ret = MUL(dstSamples, mask);
+        // Since the sample mask can only have 4 bits, counting them is faster
+        // this way on Galaxy S24 than calling bitCount().
+        int numSamples = (sampleMask & 5) + ((sampleMask >> 1) & 5);
+        numSamples = (numSamples & 3) + (numSamples >> 2);
+        ret *= 1. / float(numSamples);
+        return ret;
+    }
+}
+#endif // @FRAGMENT && @RENDER_MODE_MSAA && !@FIXED_FUNCTION_COLOR_OUTPUT

@@ -57,7 +57,7 @@ base class _WebRenderTexture extends RenderTexture {
   final html.HTMLCanvasElement canvasElement;
 
   @override
-  bool get isReady => true;
+  bool get isReady => canvasElement.isConnected;
 
   static final List<_WebRenderTexture> _pool = [];
 
@@ -403,6 +403,7 @@ class RiveWasm {
   static late js.JSFunction riveFileAssetSetFont;
   static late js.JSFunction riveFileAssetSetAudioSource;
   static late js.JSFunction deleteRiveFile;
+  static late js.JSFunction deleteFileAsset;
   static late js.JSFunction riveFileArtboardDefault;
   static late js.JSFunction riveFileArtboardNamed;
   static late js.JSFunction riveFileArtboardByIndex;
@@ -555,6 +556,14 @@ class RiveWasm {
   static late js.JSFunction stateMachineInstanceBatchAdvanceAndRender;
   static late js.JSFunction artboardSetText;
   static late js.JSFunction artboardGetText;
+  static late js.JSFunction artboardGetAllTextRuns;
+  static late js.JSFunction freeTextRunsArray;
+  static late js.JSFunction getTextRunFromArray;
+  static late js.JSFunction deleteTextValueRun;
+  static late js.JSFunction textValueRunName;
+  static late js.JSFunction textValueRunText;
+  static late js.JSFunction textValueRunPath;
+  static late js.JSFunction textValueRunSetText;
   static late js.JSFunction artboardTakeLayoutNode;
   static late js.JSFunction artboardSyncStyleChanges;
   static late js.JSFunction artboardWidthOverride;
@@ -780,6 +789,7 @@ class RiveWasm {
 
     loadRiveFile = module['loadRiveFile'] as js.JSFunction;
     deleteRiveFile = module['_deleteRiveFile'] as js.JSFunction;
+    deleteFileAsset = module['_deleteFileAsset'] as js.JSFunction;
     riveFileAssetName = module['_riveFileAssetName'] as js.JSFunction;
     riveFileAssetFileExtension =
         module['_riveFileAssetFileExtension'] as js.JSFunction;
@@ -1049,6 +1059,14 @@ class RiveWasm {
         module['_stateMachineInstanceBatchAdvanceAndRender'] as js.JSFunction;
     artboardSetText = module['_artboardSetText'] as js.JSFunction;
     artboardGetText = module['_artboardGetText'] as js.JSFunction;
+    artboardGetAllTextRuns = module['artboardGetAllTextRuns'] as js.JSFunction;
+    freeTextRunsArray = module['_freeTextRunsArray'] as js.JSFunction;
+    getTextRunFromArray = module['_getTextRunFromArray'] as js.JSFunction;
+    deleteTextValueRun = module['_deleteTextValueRun'] as js.JSFunction;
+    textValueRunName = module['_textValueRunName'] as js.JSFunction;
+    textValueRunText = module['_textValueRunText'] as js.JSFunction;
+    textValueRunPath = module['_textValueRunPath'] as js.JSFunction;
+    textValueRunSetText = module['_textValueRunSetText'] as js.JSFunction;
     artboardTakeLayoutNode = module['_artboardTakeLayoutNode'] as js.JSFunction;
     artboardSyncStyleChanges =
         module['_artboardSyncStyleChanges'] as js.JSFunction;
@@ -1367,7 +1385,6 @@ Future<RiveNative?> makeRiveNative() async {
 
 class _RiveNativeWebView extends LeafRenderObjectWidget {
   final _WebRenderTexture renderTexture;
-  // final _NativeRenderTexture renderTexture;
   final RenderTexturePainter? painter;
   const _RiveNativeWebView(this.renderTexture, this.painter, {super.key});
 

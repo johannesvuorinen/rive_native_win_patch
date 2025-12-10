@@ -3,6 +3,7 @@
 #include "rive/shapes/paint/color.hpp"
 #include "rive/core/binary_reader.hpp"
 #include "rive/shapes/paint/trim_path.hpp"
+#include "rive/shape_paint_type.hpp"
 #include "rive/shapes/paint/dash_path.hpp"
 #include "renderer/src/rive_render_path.hpp"
 #include "rive/math/hit_test.hpp"
@@ -210,15 +211,15 @@ EXPORT void dashPathInvalidate(DashPathEffect* dashPath)
 class EditorTrimPath : public rive::TrimPath
 {
 public:
-    rive::ShapePaintPath* editorEffectPath(const rive::RawPath* source)
+    rive::ShapePaintPath* editorEffectPath(const rive::RawPath* source,
+                                           int shapePaintType)
     {
         if (m_path.hasRenderPath())
         {
             // Previous result hasn't been invalidated, it's still good.
             return &m_path;
         }
-
-        trimPath(source);
+        trimPath(source, static_cast<rive::ShapePaintType>(shapePaintType));
 
         return &m_path;
     }
@@ -310,7 +311,8 @@ EXPORT void deleteTrimPathEffect(EditorTrimPath* trimPath) { delete trimPath; }
 
 EXPORT rive::RenderPath* trimPathEffectPath(rive::Factory* factory,
                                             EditorTrimPath* trimPath,
-                                            rive::RenderPath* renderPath)
+                                            rive::RenderPath* renderPath,
+                                            int shapePaintType)
 {
     if (trimPath == nullptr || renderPath == nullptr)
     {
@@ -318,7 +320,7 @@ EXPORT rive::RenderPath* trimPathEffectPath(rive::Factory* factory,
     }
     assert(factory != nullptr);
     const rive::RawPath& rawPath = renderPathToRawPath(factory, renderPath);
-    auto resultPath = trimPath->editorEffectPath(&rawPath);
+    auto resultPath = trimPath->editorEffectPath(&rawPath, shapePaintType);
     auto resultRenderPath = resultPath->renderPath(factory);
     resultRenderPath->ref();
     return resultRenderPath;

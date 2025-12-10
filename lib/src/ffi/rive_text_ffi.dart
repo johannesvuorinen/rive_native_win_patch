@@ -212,6 +212,8 @@ final class GlyphRunNative extends Struct implements GlyphRun {
   @Uint8()
   external int level;
 
+  external SimpleUint32Array joiners;
+
   @override
   double get fontSize => size;
 

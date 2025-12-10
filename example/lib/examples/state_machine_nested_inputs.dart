@@ -44,6 +44,7 @@ class _StateMachineInputsExampleState
                     innerOn = value!;
                   });
                   stateMachine
+                      // ignore: deprecated_member_use
                       .boolean(
                         'CircleOuterState',
                         path: 'CircleOuter',
@@ -67,6 +68,7 @@ class _StateMachineInputsExampleState
                     outerOn = value!;
                   });
                   stateMachine
+                      // ignore: deprecated_member_use
                       .boolean(
                         'CircleInnerState',
                         path: 'CircleOuter/CircleInner',

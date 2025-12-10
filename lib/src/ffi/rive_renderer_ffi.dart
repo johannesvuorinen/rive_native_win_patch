@@ -288,12 +288,12 @@ final void Function(Pointer<Void>) _trimPathEffectInvalidate = nativeLib
         'trimPathEffectInvalidate')
     .asFunction();
 
-final Pointer<Void> Function(Pointer<Void>, Pointer<Void>, Pointer<Void>)
+final Pointer<Void> Function(Pointer<Void>, Pointer<Void>, Pointer<Void>, int)
     _trimPathEffectPath = nativeLib
         .lookup<
             NativeFunction<
                 Pointer<Void> Function(Pointer<Void>, Pointer<Void>,
-                    Pointer<Void>)>>('trimPathEffectPath')
+                    Pointer<Void>, Uint8)>>('trimPathEffectPath')
         .asFunction();
 
 final void Function(
@@ -1035,13 +1035,14 @@ class FFITrimPath extends TrimPathEffect
   set start(double value) => _trimPathEffectSetStart(_pointer, value);
 
   @override
-  RenderPath effectPath(covariant FFIRenderPath path) =>
+  RenderPath effectPath(covariant FFIRenderPath path, int shapePaintType) =>
       FFIRenderPath.fromPointer(
         path.riveFactory,
         _trimPathEffectPath(
           path.riveFactory.pointer,
           _pointer,
           path.pointer,
+          shapePaintType,
         ),
       );
 

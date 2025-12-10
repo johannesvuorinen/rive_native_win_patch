@@ -1,3 +1,25 @@
+## 0.1.0
+
+### Fixes
+
+- Fixed Android build issues in certain environments. See issue [555](https://github.com/rive-app/rive-flutter/issues/555). Build commands are now executed from Gradle instead of CMakeLists, and the setup process automatically skips `rive_native:setup` if the required libraries are already downloaded.
+
+### Build & Platform Updates
+
+- Android: Added support for skipping automated setup by setting `rive.native.skipSetup=true` in your app's `gradle.properties`. When enabled, you must manually run `dart run rive_native:setup --verbose --clean --platform android` to download the required libraries.
+
+## 0.0.17
+
+- Marks methods to access text runs and state machine inputs as deprecated. While this functionality won't be removed in the near future, we encourage adoption of data binding to future-proof your Rive usage.
+
+### Fixes
+
+- Improved library loading and error message. See issue [566](https://github.com/rive-app/rive-flutter/issues/566)
+- Fixed layout issues that occurred on first render when using `Fit.layout` by correcting the order of artboard resizing and advancing calls. Added a new `RiveArtboardLayoutMixin` that provides common layout options for painters, including fit mode, alignment, and scale factor controls.
+- Resolves an issue where under some conditions the graphic may not restart the animation ticker. Adds a `isTickerActive` to `RivePainter`.
+- Fixed a lifetime issue with `FileAsset`s when the owning Rive `File` is destroyed.
+- Only send `textureFrameAvailable` on main (platform) thread (iOS and macOS). This likely resolves crashes observed during Flutter engine teardow when using `Factory.rive`.
+
 ## 0.0.16
 
 - Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
@@ -5,6 +27,7 @@
 ### Fixes
 
 - Fixes rendering issues on certain Android devices.
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
 
 ### Build & Platform Updates
 

@@ -340,7 +340,7 @@ void assertSomeAssumptions()
     assert(OFFSET_OF(rive::Paragraph, runs) == 0);
     assert(OFFSET_OF(rive::Paragraph, level) == 8);
 
-    assert(sizeof(rive::GlyphRun) == 68);
+    assert(sizeof(rive::GlyphRun) == 76);
     assert(OFFSET_OF(rive::GlyphRun, font) == 0);
     assert(OFFSET_OF(rive::GlyphRun, size) == 4);
     assert(OFFSET_OF(rive::GlyphRun, lineHeight) == 8);
@@ -353,6 +353,7 @@ void assertSomeAssumptions()
     assert(OFFSET_OF(rive::GlyphRun, breaks) == 56);
     assert(OFFSET_OF(rive::GlyphRun, styleId) == 64);
     assert(OFFSET_OF(rive::GlyphRun, level) == 66);
+    assert(OFFSET_OF(rive::GlyphRun, joiners) == 68);
 
     assert(sizeof(rive::GlyphLine) == 32);
 }

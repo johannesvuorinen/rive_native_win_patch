@@ -116,6 +116,15 @@ abstract class ScriptedDataValue {
   double numberValue();
   String stringValue();
   bool booleanValue();
+  int colorValue();
+}
+
+abstract class ScriptedPath {
+  RenderPath? renderPath(RenderPath path);
+}
+
+abstract class PointerEvent {
+  HitResult get hitResult;
 }
 
 abstract class LuauState {
@@ -154,11 +163,21 @@ abstract class LuauState {
   void pushFunction(LuauFunction t, {String debugName = 'unknown'});
   ScriptedRenderer pushRenderer(Renderer renderer);
   void pushArtboard(Artboard artboard);
+  void pushPath(RenderPath path);
   void pushViewModelInstanceValue(InternalViewModelInstanceValue value);
   void setGlobal(String name) => setField(luaGlobalsIndex, name);
 
   /// Pushes on the top of the stack a copy of the element at the given [index].
   void pushValue(int index);
+
+  /// Creates a table and pushes it on the stack, reserving memory for arraySize
+  /// and recordCount.
+  void createTable({int arraySize = 0, int recordCount = 0});
+
+  /// Removes the element at the given valid index, shifting down the elements
+  /// above this index to fill the gap. Cannot be called with a pseudo-index,
+  /// because a pseudo-index is not an actual stack position.
+  void remove(int index);
 
   static const maxCStack = 8000;
   static const luaGlobalsIndex = -maxCStack - 2002;
@@ -181,6 +200,19 @@ abstract class LuauState {
   /// This function pops the value from the stack. As in Lua, this function may
   /// trigger a metamethod for the "newindex" event
   void setField(int index, String name);
+
+  /// The function pops a table from the stack and sets it as the metatable of
+  /// the object at the given index.
+  void setMetaTable(int index);
+
+  bool equal(int index1, int index2);
+
+  bool lessThan(int index1, int index2);
+
+  /// Pushes onto the stack a string identifying the current position of the
+  /// control at level [level] in the call stack. Typically this string has the
+  /// following format: chunkname:currentline:
+  void where(int level);
 
   /// lua_settop equivalent.
   void setTop(int index);
@@ -244,5 +276,9 @@ abstract class LuauState {
   ScriptedDataValue pushDataValueNumber(double value);
   ScriptedDataValue pushDataValueString(String value);
   ScriptedDataValue pushDataValueBoolean(bool value);
+  ScriptedDataValue pushDataValueColor(int value);
   ScriptedDataValue dataValueAt(int index);
+  ScriptedPath pathAt(int index);
+
+  PointerEvent pushPointerEvent(int id, Vec2D position);
 }

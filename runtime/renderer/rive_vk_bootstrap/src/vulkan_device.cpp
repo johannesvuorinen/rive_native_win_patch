@@ -3,9 +3,11 @@
  */
 
 #include <string>
+#include <sstream>
 #include "rive/renderer/vulkan/vkutil.hpp"
 #include "rive_vk_bootstrap/vulkan_device.hpp"
 #include "rive_vk_bootstrap/vulkan_instance.hpp"
+#include "shaders/constants.glsl"
 #include "logging.hpp"
 #include "vulkan_library.hpp"
 
@@ -30,6 +32,36 @@ static const char* physicalDeviceTypeName(VkPhysicalDeviceType type)
     }
 }
 
+void unpackDriverVersion(const VkPhysicalDeviceProperties& props,
+                         uint32_t* majorOut,
+                         uint32_t* minorOut,
+                         uint32_t* patchOut)
+{
+    if (props.vendorID == VULKAN_VENDOR_NVIDIA)
+    {
+        // NVidia uses 10|8|8|6 encoding for driver version. We'll ignore the
+        // fourth version section.
+        *majorOut = props.driverVersion >> 22;
+        *minorOut = (props.driverVersion >> 14) & 0xff;
+        *patchOut = (props.driverVersion >> 6) & 0xff;
+    }
+#ifdef _WIN32
+    else if (props.vendorID == VULKAN_VENDOR_INTEL)
+    {
+        *majorOut = props.driverVersion >> 14;
+        *minorOut = props.driverVersion & 0x3fff;
+        *patchOut = 0;
+    }
+#endif
+    else
+    {
+        // Everything else seems to use the standard Vulkan encoding.
+        *majorOut = VK_API_VERSION_MAJOR(props.driverVersion);
+        *minorOut = VK_API_VERSION_MINOR(props.driverVersion);
+        *patchOut = VK_API_VERSION_PATCH(props.driverVersion);
+    }
+}
+
 VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
 {
     assert(!opts.headless ||
@@ -44,11 +76,13 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
         nameFilter = gpuFromEnv;
     }
 
-    auto findResult = findCompatiblePhysicalDevice(
-        instance,
-        nameFilter,
-        opts.presentationSurfaceForDeviceSelection);
+    auto findResult =
+        findCompatiblePhysicalDevice(instance,
+                                     nameFilter,
+                                     opts.presentationSurfaceForDeviceSelection,
+                                     opts.minimumSupportedAPIVersion);
     m_physicalDevice = findResult.physicalDevice;
+    m_name = findResult.deviceName;
 
     DEFINE_AND_LOAD_INSTANCE_FUNC(vkGetPhysicalDeviceFeatures, instance);
     assert(vkGetPhysicalDeviceFeatures != nullptr);
@@ -70,7 +104,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
     };
 
     m_riveVulkanFeatures = {
-        .apiVersion = instance.apiVersion(),
+        .apiVersion = findResult.deviceAPIVersion,
         .independentBlend = bool(requestedFeatures.independentBlend),
         .fillModeNonSolid = bool(requestedFeatures.fillModeNonSolid),
         .fragmentStoresAndAtomics =
@@ -100,11 +134,12 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
 
     // This extension *must* be enabled if it's supported (it's usually on a
     // device that is not a fully-conforming device)
-    // TODO: we may want to note that a device had this extension, it might be
-    // useful information for devices that are doing weird things.
-    addExtensionIfSupported("VK_KHR_portability_subset",
-                            supportedExtensions,
-                            addedExtensions);
+    if (addExtensionIfSupported("VK_KHR_portability_subset",
+                                supportedExtensions,
+                                addedExtensions))
+    {
+        m_riveVulkanFeatures.VK_KHR_portability_subset = true;
+    }
 
     if (!opts.headless)
     {
@@ -118,15 +153,20 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
         }
     }
 
-    // If this has a value we'll use it in the VkDeviceCreateInfo chain
+    // If these have values we'll use them in the VkDeviceCreateInfo chain
     std::optional<VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>
         rasterOrderFeatures;
+    std::optional<VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT>
+        interlockFeatures;
 
     if (!opts.coreFeaturesOnly)
     {
         rasterOrderFeatures = tryEnableRasterOrderFeatures(instance,
                                                            supportedExtensions,
                                                            addedExtensions);
+        interlockFeatures = tryEnableInterlockFeatures(instance,
+                                                       supportedExtensions,
+                                                       addedExtensions);
     }
 
     // Get our list of queue family properties.
@@ -172,15 +212,25 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
     // Finally create the actual device.
     VkDeviceCreateInfo deviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = (rasterOrderFeatures.has_value())
-                     ? &rasterOrderFeatures.value()
-                     : nullptr,
+        .pNext = nullptr,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queueCreateInfo,
         .enabledExtensionCount = uint32_t(addedExtensions.size()),
         .ppEnabledExtensionNames = addedExtensions.data(),
         .pEnabledFeatures = &requestedFeatures,
     };
+    if (rasterOrderFeatures.has_value())
+    {
+        rasterOrderFeatures.value().pNext =
+            const_cast<void*>(deviceCreateInfo.pNext);
+        deviceCreateInfo.pNext = &rasterOrderFeatures.value();
+    }
+    if (interlockFeatures.has_value())
+    {
+        interlockFeatures.value().pNext =
+            const_cast<void*>(deviceCreateInfo.pNext);
+        deviceCreateInfo.pNext = &interlockFeatures.value();
+    }
 
     DEFINE_AND_LOAD_INSTANCE_FUNC(vkCreateDevice, instance);
     VK_CHECK(vkCreateDevice(m_physicalDevice,
@@ -202,12 +252,15 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
     LOAD_MEMBER_INSTANCE_FUNC(vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
                               instance);
 
-    printf("==== Vulkan %i.%i.%i GPU (%s): %s [ ",
+    printf("==== Vulkan %i.%i.%i GPU (%s): %s (driver %i.%i.%i) [ ",
            VK_API_VERSION_MAJOR(m_riveVulkanFeatures.apiVersion),
            VK_API_VERSION_MINOR(m_riveVulkanFeatures.apiVersion),
            VK_API_VERSION_PATCH(m_riveVulkanFeatures.apiVersion),
            physicalDeviceTypeName(findResult.deviceType),
-           findResult.deviceName.c_str());
+           findResult.deviceName.c_str(),
+           findResult.driverVersionMajor,
+           findResult.driverVersionMinor,
+           findResult.driverVersionPatch);
     struct CommaSeparator
     {
         const char* m_separator = "";
@@ -223,6 +276,10 @@ VulkanDevice::VulkanDevice(VulkanInstance& instance, const Options& opts)
         printf("%sshaderClipDistance", *commaSeparator);
     if (m_riveVulkanFeatures.rasterizationOrderColorAttachmentAccess)
         printf("%srasterizationOrderColorAttachmentAccess", *commaSeparator);
+    if (m_riveVulkanFeatures.fragmentShaderPixelInterlock)
+        printf("%sfragmentShaderPixelInterlock", *commaSeparator);
+    if (m_riveVulkanFeatures.VK_KHR_portability_subset)
+        printf("%sVK_KHR_portability_subset", *commaSeparator);
     printf(" ] ====\n");
 }
 
@@ -238,10 +295,44 @@ VkSurfaceCapabilitiesKHR VulkanDevice::getSurfaceCapabilities(
     return caps;
 }
 
+bool VulkanDevice::hasSupportedDevice(VulkanInstance& instance,
+                                      uint32_t minimumSupportedAPIVersion)
+{
+    std::vector<VkPhysicalDevice> physicalDevices;
+    {
+        DEFINE_AND_LOAD_INSTANCE_FUNC(vkEnumeratePhysicalDevices, instance);
+        assert(vkEnumeratePhysicalDevices != nullptr);
+
+        uint32_t count;
+        VK_CHECK(
+            vkEnumeratePhysicalDevices(instance.vkInstance(), &count, nullptr));
+        physicalDevices.resize(count);
+        VK_CHECK(vkEnumeratePhysicalDevices(instance.vkInstance(),
+                                            &count,
+                                            physicalDevices.data()));
+    }
+
+    DEFINE_AND_LOAD_INSTANCE_FUNC(vkGetPhysicalDeviceProperties, instance);
+    assert(vkGetPhysicalDeviceProperties != nullptr);
+
+    for (auto& device : physicalDevices)
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(device, &props);
+        if (props.apiVersion >= minimumSupportedAPIVersion)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 VulkanDevice::FindDeviceResult VulkanDevice::findCompatiblePhysicalDevice(
     VulkanInstance& instance,
     const char* nameFilter,
-    VkSurfaceKHR optionalSurfaceForValidation)
+    VkSurfaceKHR optionalSurfaceForValidation,
+    uint32_t minimumSupportedAPIVersion)
 {
     if (nameFilter != nullptr && nameFilter[0] == '\0')
     {
@@ -317,12 +408,25 @@ VulkanDevice::FindDeviceResult VulkanDevice::findCompatiblePhysicalDevice(
 
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(device, &props);
+
+            if (props.apiVersion < minimumSupportedAPIVersion)
+            {
+                // This device is below our minimum supported API version
+                continue;
+            }
+
             if (strstr(props.deviceName, nameFilter) != nullptr)
             {
+                uint32_t major, minor, patch;
+                unpackDriverVersion(props, &major, &minor, &patch);
                 matchResult = {
                     .physicalDevice = device,
                     .deviceName = props.deviceName,
                     .deviceType = props.deviceType,
+                    .deviceAPIVersion = props.apiVersion,
+                    .driverVersionMajor = major,
+                    .driverVersionMinor = minor,
+                    .driverVersionPatch = patch,
                 };
                 matchedDeviceNames.push_back(std::string{props.deviceName});
             }
@@ -363,6 +467,12 @@ VulkanDevice::FindDeviceResult VulkanDevice::findCompatiblePhysicalDevice(
                 VkPhysicalDeviceProperties props{};
                 vkGetPhysicalDeviceProperties(device, &props);
 
+                if (props.apiVersion < minimumSupportedAPIVersion)
+                {
+                    // This device is below our minimum supported API version
+                    continue;
+                }
+
                 if (optionalSurfaceForValidation != VK_NULL_HANDLE &&
                     !IsSurfaceSupported(device))
                 {
@@ -374,10 +484,17 @@ VulkanDevice::FindDeviceResult VulkanDevice::findCompatiblePhysicalDevice(
                 if (!onlyAcceptDesiredType ||
                     props.deviceType == desiredDeviceType)
                 {
+                    uint32_t major, minor, patch;
+                    unpackDriverVersion(props, &major, &minor, &patch);
+
                     return {
                         .physicalDevice = device,
                         .deviceName = props.deviceName,
                         .deviceType = props.deviceType,
+                        .deviceAPIVersion = props.apiVersion,
+                        .driverVersionMajor = major,
+                        .driverVersionMinor = minor,
+                        .driverVersionPatch = patch,
                     };
                 }
             }
@@ -430,6 +547,45 @@ VulkanDevice::tryEnableRasterOrderFeatures(
                 return requestedRasterOrderFeatures;
             }
             break;
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT> VulkanDevice::
+    tryEnableInterlockFeatures(
+        VulkanInstance& instance,
+        const std::vector<VkExtensionProperties>& supportedExtensions,
+        std::vector<const char*>& extensions)
+{
+    if (addExtensionIfSupported(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME,
+                                supportedExtensions,
+                                extensions))
+    {
+        constexpr static VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT
+            requestedInterlockFeatures = {
+                .sType =
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT,
+                .fragmentShaderPixelInterlock = VK_TRUE,
+            };
+
+        auto testedInterlockFeatures = requestedInterlockFeatures;
+
+        // Test to see if this is supported
+        VkPhysicalDeviceFeatures2 features = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &testedInterlockFeatures,
+        };
+
+        if (instance.tryGetPhysicalDeviceFeatures2(m_physicalDevice,
+                                                   &features) &&
+            testedInterlockFeatures.fragmentShaderPixelInterlock)
+        {
+            // The query came back with the requested flag set so return the
+            // feature set we want, it's supported!
+            m_riveVulkanFeatures.fragmentShaderPixelInterlock = true;
+            return requestedInterlockFeatures;
         }
     }
 

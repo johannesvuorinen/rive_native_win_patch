@@ -8,6 +8,7 @@ import 'package:rive_native/src/console_reader.dart';
 import 'package:rive_native/src/ffi/dynamic_library_helper.dart';
 import 'package:rive_native/src/ffi/rive_ffi.dart';
 import 'package:rive_native/src/ffi/rive_ffi_reference.dart';
+import 'package:rive_native/src/ffi/rive_renderer_ffi.dart' as rive_renderer;
 import 'package:rive_native/utilities.dart';
 
 final DynamicLibrary _nativeLib = DynamicLibraryHelper.nativeLib;
@@ -48,6 +49,78 @@ final void Function(
               Size,
               Int32,
             )>>('luau_load')
+    .asFunction();
+final void Function(
+  Pointer<Void> state,
+  int objindex,
+) _riveLuaSetMetaTable = _nativeLib
+    .lookup<
+        NativeFunction<
+            Void Function(
+              Pointer<Void>,
+              Int32,
+            )>>('lua_setmetatable')
+    .asFunction();
+final int Function(
+  Pointer<Void> state,
+  int index1,
+  int index2,
+) _riveLuaEqual = _nativeLib
+    .lookup<
+        NativeFunction<
+            Int32 Function(
+              Pointer<Void>,
+              Int32,
+              Int32,
+            )>>('lua_equal')
+    .asFunction();
+final int Function(
+  Pointer<Void> state,
+  int index1,
+  int index2,
+) _riveLuaLessThan = _nativeLib
+    .lookup<
+        NativeFunction<
+            Int32 Function(
+              Pointer<Void>,
+              Int32,
+              Int32,
+            )>>('lua_lessthan')
+    .asFunction();
+final void Function(
+  Pointer<Void> state,
+  int level,
+) _riveLuaWhere = _nativeLib
+    .lookup<
+        NativeFunction<
+            Void Function(
+              Pointer<Void>,
+              Int32,
+            )>>('luaL_where')
+    .asFunction();
+final void Function(
+  Pointer<Void> state,
+  int narray,
+  int nrec,
+) _riveLuaCreateTable = _nativeLib
+    .lookup<
+        NativeFunction<
+            Void Function(
+              Pointer<Void>,
+              Int32,
+              Int32,
+            )>>('lua_createtable')
+    .asFunction();
+final void Function(
+  Pointer<Void> state,
+  int idx,
+) _riveLuaRemove = _nativeLib
+    .lookup<
+        NativeFunction<
+            Void Function(
+              Pointer<Void>,
+              Int32,
+            )>>('lua_remove')
     .asFunction();
 final bool Function(
   Pointer<Void> state,
@@ -244,6 +317,12 @@ final bool Function(Pointer<Void> imageAsset)
             'riveLuaScriptedDataValueBooleanValue')
         .asFunction();
 
+final int Function(Pointer<Void> value) _riveLuaScriptedDataValueColorValue =
+    nativeLib
+        .lookup<NativeFunction<Int Function(Pointer<Void>)>>(
+            'riveLuaScriptedDataValueColorValue')
+        .asFunction();
+
 final void Function(Pointer<Void> state, int value) _riveLuaSetTop = _nativeLib
     .lookup<NativeFunction<Void Function(Pointer<Void>, Int32)>>(
       'lua_settop',
@@ -297,6 +376,16 @@ final void Function(Pointer<Void> state, bool value) _riveLuaPushBoolean =
     _nativeLib
         .lookup<NativeFunction<Void Function(Pointer<Void>, Bool)>>(
           'lua_pushboolean',
+        )
+        .asFunction();
+
+final void Function(
+        Pointer<Void> stat, Pointer<Void> factory, Pointer<Void> path)
+    _riveLuaPushPath = _nativeLib
+        .lookup<
+            NativeFunction<
+                Void Function(Pointer<Void>, Pointer<Void>, Pointer<Void>)>>(
+          'riveLuaPushPath',
         )
         .asFunction();
 
@@ -370,10 +459,49 @@ final Pointer<Void> Function(Pointer<Void> state, bool)
         )
         .asFunction();
 
+final Pointer<Void> Function(Pointer<Void> state, int)
+    _riveLuaPushDataValueColor = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Int)>>(
+          'riveLuaPushDataValueColor',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int id, double x, double y)
+    _riveLuaPushPointerEvent = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Uint8, Float, Float)>>(
+          'riveLuaPushPointerEvent',
+        )
+        .asFunction();
+
+final int Function(Pointer<Void> state) _riveLuaPointerEventHitResult =
+    _nativeLib
+        .lookup<NativeFunction<Uint8 Function(Pointer<Void>)>>(
+          'riveLuaPointerEventHitResult',
+        )
+        .asFunction();
+
 final Pointer<Void> Function(Pointer<Void> state, int idx) _riveLuaToDataValue =
     _nativeLib
         .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Int32)>>(
           'riveLuaDataValue',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int idx) _riveLuaToPath =
+    _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Int32)>>(
+          'riveLuaPath',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, Pointer<Void> scriptedPath)
+    _riveLuaRenderPath = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Pointer<Void>)>>(
+          'riveLuaRenderPath',
         )
         .asFunction();
 
@@ -671,8 +799,18 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   }
 
   @override
+  ScriptedDataValue pushDataValueColor(int value) {
+    final nativeDataValueColor = _riveLuaPushDataValueColor(nativePtr, value);
+    return FFIScriptedDataValue(nativeDataValueColor);
+  }
+
+  @override
   ScriptedDataValue dataValueAt(int index) =>
       FFIScriptedDataValue(_riveLuaToDataValue(nativePtr, index));
+
+  @override
+  ScriptedPath pathAt(int index) =>
+      FFIScriptedPath(nativePtr, _riveLuaToPath(nativePtr, index));
 
   @override
   Vec2D vectorAt(int index) {
@@ -685,6 +823,42 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   @override
   void pushVector(Vec2D value) =>
       _riveLuaPushVector(nativePtr, value.x, value.y);
+
+  @override
+  PointerEvent pushPointerEvent(int id, Vec2D position) => FFIPointerEvent(
+        _riveLuaPushPointerEvent(nativePtr, id, position.x, position.y),
+      );
+
+  @override
+  void createTable({int arraySize = 0, int recordCount = 0}) =>
+      _riveLuaCreateTable(nativePtr, arraySize, recordCount);
+
+  @override
+  void remove(int index) => _riveLuaRemove(nativePtr, index);
+
+  @override
+  void setMetaTable(int index) => _riveLuaSetMetaTable(nativePtr, index);
+
+  @override
+  bool equal(int index1, int index2) =>
+      _riveLuaEqual(nativePtr, index1, index2) != 0;
+
+  @override
+  bool lessThan(int index1, int index2) =>
+      _riveLuaLessThan(nativePtr, index1, index2) != 0;
+
+  @override
+  void where(int level) => _riveLuaWhere(nativePtr, level);
+
+  @override
+  void pushPath(RenderPath path) {
+    final ffiRenderPath = path as rive_renderer.FFIRenderPath;
+    _riveLuaPushPath(
+      nativePtr,
+      ffiRenderPath.riveFactory.pointer,
+      ffiRenderPath.pointer,
+    );
+  }
 }
 
 final class BufferResponse extends Struct {
@@ -726,8 +900,17 @@ class FFIScriptedRenderer extends ScriptedRenderer {
   }
 }
 
+class FFIPointerEvent extends PointerEvent {
+  final Pointer<Void> pointer;
+  FFIPointerEvent(this.pointer);
+
+  @override
+  HitResult get hitResult =>
+      HitResult.values[_riveLuaPointerEventHitResult(pointer)];
+}
+
 class FFIScriptedDataValue extends ScriptedDataValue {
-  Pointer<Void> pointer;
+  final Pointer<Void> pointer;
   FFIScriptedDataValue(this.pointer);
   @override
   String get type {
@@ -750,6 +933,29 @@ class FFIScriptedDataValue extends ScriptedDataValue {
   bool booleanValue() {
     final val = _riveLuaScriptedDataValueBooleanValue(pointer);
     return val;
+  }
+
+  @override
+  int colorValue() {
+    final val = _riveLuaScriptedDataValueColorValue(pointer);
+    return val;
+  }
+}
+
+class FFIScriptedPath extends ScriptedPath {
+  final Pointer<Void> statePtr;
+  final Pointer<Void> pointer;
+  FFIScriptedPath(this.statePtr, this.pointer);
+
+  @override
+  RenderPath? renderPath(
+    RenderPath path,
+  ) {
+    final riveFactory = (path as rive_renderer.FFIRenderPath).riveFactory;
+    final renderPathPointer = _riveLuaRenderPath(statePtr, pointer);
+    final ffRenderPath =
+        rive_renderer.FFIRenderPath.fromPointer(riveFactory, renderPathPointer);
+    return ffRenderPath;
   }
 }
 

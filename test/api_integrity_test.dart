@@ -481,6 +481,102 @@ void main() {
     expect(_debugStateMachineCount(), 0);
   });
 
+  test('FileAsset live on after file is disposed', () async {
+    expect(_debugFileCount(), 0);
+    final file = File('test/assets/out_of_band.riv');
+    final bytes = await file.readAsBytes();
+    List<rive.ImageAsset> imageAssets = [];
+    List<rive.FontAsset> fontAssets = [];
+    List<rive.AudioAsset> audioAssets = [];
+
+    var riveFile = await rive.File.decode(
+      bytes,
+      riveFactory: rive.Factory.flutter,
+      assetLoader: (fileAsset, bytes) {
+        switch (fileAsset) {
+          case rive.ImageAsset imageAsset:
+            imageAssets.add(imageAsset);
+            break;
+          case rive.FontAsset fontAsset:
+            fontAssets.add(fontAsset);
+            break;
+          case rive.AudioAsset audioAsset:
+            audioAssets.add(audioAsset);
+            break;
+          case rive.UnknownAsset _:
+            break;
+        }
+        return true;
+      },
+    );
+    expect(riveFile, isNotNull);
+    expect(imageAssets.length, 3);
+    expect(fontAssets.length, 3);
+    expect(audioAssets.length, 3);
+    expect(_debugFileCount(), 1);
+
+    // Assets should remain alive after the file is disposed
+    riveFile?.dispose();
+    expect(_debugFileCount(), 0);
+
+    // Validate assets are still around
+    expect(imageAssets[0].assetId, 2929282);
+    expect(imageAssets[1].assetId, 2929283);
+    expect(imageAssets[2].assetId, 2989123);
+    expect(fontAssets[0].assetId, 594377);
+    expect(fontAssets[1].assetId, 593562);
+    expect(fontAssets[2].assetId, 593587);
+    expect(audioAssets[0].assetId, 2929275);
+    expect(audioAssets[1].assetId, 2929340);
+    expect(audioAssets[2].assetId, 2989208);
+
+    final riveFactory = rive.Factory.flutter;
+
+    // Decode font
+    final fontFile = File('test/assets/fonts/Inter-594377.ttf');
+    final fontBytes = await fontFile.readAsBytes();
+    final font = await riveFactory.decodeFont(fontBytes);
+
+    // Audio
+    final audioFile = File('test/assets/audio/referenced_audio-2929340.wav');
+    final audioBytes = await audioFile.readAsBytes();
+    final audio = await riveFactory.decodeAudio(audioBytes);
+
+    // Image
+    final imageFile = File('test/assets/images/referenced-image-2929282.png');
+    final imageBytes = await imageFile.readAsBytes();
+    final image = await riveFactory.decodeImage(imageBytes);
+
+    // File is disposed, assets should still be accessible
+    expect(imageAssets[0].renderImage(image!), true);
+    expect(fontAssets[0].font(font!), true);
+    expect(audioAssets[0].audio(audio!), true);
+
+    // Dispose assets
+    imageAssets[0].dispose();
+    imageAssets[1].dispose();
+    imageAssets[2].dispose();
+    fontAssets[0].dispose();
+    fontAssets[1].dispose();
+    fontAssets[2].dispose();
+    audioAssets[0].dispose();
+    audioAssets[1].dispose();
+    audioAssets[2].dispose();
+
+    // Asset should be diposed
+    expect(imageAssets[0].assetId, 0);
+    expect(imageAssets[1].assetId, 0);
+    expect(imageAssets[2].assetId, 0);
+    expect(fontAssets[0].assetId, 0);
+    expect(fontAssets[1].assetId, 0);
+    expect(fontAssets[2].assetId, 0);
+    expect(audioAssets[0].assetId, 0);
+    expect(audioAssets[1].assetId, 0);
+    expect(audioAssets[2].assetId, 0);
+
+    expect(_debugFileCount(), 0); // should still be 0
+  });
+
   test('View Model lives on when Rive file is disposed', () async {
     expect(_debugFileCount(), 0);
     final file = File('test/assets/databinding.riv');
@@ -716,5 +812,65 @@ void main() {
     artboardGreen?.dispose();
     expect(_debugBindableArtboardCount(), 0);
     expect(_debugFileCount(), 0);
+  });
+
+  test('file and artboard live on with text runs referenced', () async {
+    expect(_debugFileCount(), 0);
+    expect(_debugArtboardCount(), 0);
+
+    final file = File('test/assets/get_all_text_runs_test.riv');
+    final bytes = await file.readAsBytes();
+    var riveFile =
+        await rive.File.decode(bytes, riveFactory: rive.Factory.flutter);
+    expect(riveFile, isNotNull);
+    expect(_debugFileCount(), 1);
+
+    final artboard = riveFile?.defaultArtboard();
+    expect(artboard, isNotNull);
+    expect(_debugArtboardCount(), 1);
+
+    // Get all text runs
+    final textRuns = artboard!.textRuns;
+    expect(textRuns.length, 10);
+
+    // Verify initial state
+    expect(_debugFileCount(), 1);
+    expect(_debugArtboardCount(), 1);
+
+    // Dispose the file and artboard
+    riveFile?.dispose();
+    artboard.dispose();
+
+    // File and artboard should still be alive because text runs reference them
+    expect(_debugFileCount(), 1);
+    expect(_debugArtboardCount(), 1);
+
+    // Text runs should still be accessible
+    final firstTextRun = textRuns.firstWhere((tr) => tr.name == 'Run 1 name');
+    expect(firstTextRun.text, 'run 1 value');
+
+    // Can still modify text runs
+    firstTextRun.text = 'modified value';
+    expect(firstTextRun.text, 'modified value');
+
+    // Dispose all but one text run
+    for (int i = 0; i < textRuns.length - 1; i++) {
+      textRuns[i].dispose();
+    }
+
+    // File and artboard should still be alive because one text run remains
+    expect(_debugFileCount(), 1);
+    expect(_debugArtboardCount(), 1);
+
+    // Last text run should still be accessible
+    final lastTextRun = textRuns.last;
+    expect(lastTextRun.name, isNotEmpty);
+
+    // Dispose the last text run
+    lastTextRun.dispose();
+
+    // Now file and artboard should finally be cleaned up
+    expect(_debugFileCount(), 0);
+    expect(_debugArtboardCount(), 0);
   });
 }

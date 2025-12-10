@@ -126,6 +126,12 @@ final Pointer<Void> Function(
             )>>('loadRiveFile')
     .asFunction();
 final Pointer<NativeFunction<Void Function(Pointer<Void>)>>
+    _deleteFileAssetNative =
+    nativeLib.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
+        'deleteFileAsset');
+final void Function(Pointer<Void> file) _deleteFileAsset =
+    _deleteFileAssetNative.asFunction();
+final Pointer<NativeFunction<Void Function(Pointer<Void>)>>
     _deleteRiveFileNative = nativeLib
         .lookup<NativeFunction<Void Function(Pointer<Void>)>>('deleteRiveFile');
 final void Function(Pointer<Void> file) _deleteRiveFile =
@@ -1110,6 +1116,51 @@ final Pointer<Void> Function(Pointer<Void>) _makeRawText = nativeLib
         'makeRawText')
     .asFunction();
 
+final Pointer<Pointer<Void>> Function(
+        Pointer<Void> artboard, Pointer<Int> count) _artboardGetAllTextRuns =
+    nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Pointer<Void>> Function(
+                    Pointer<Void>, Pointer<Int>)>>('artboardGetAllTextRuns')
+        .asFunction();
+
+final void Function(Pointer<Pointer<Void>> arr) _freeTextRunsArray = nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Pointer<Void>>)>>(
+        'freeTextRunsArray')
+    .asFunction();
+
+final Pointer<NativeFunction<Void Function(Pointer<Void>)>>
+    _deleteTextValueRunNative =
+    nativeLib.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
+        'deleteTextValueRun');
+final void Function(Pointer<Void> wrappedTextRun) _deleteTextValueRun =
+    _deleteTextValueRunNative.asFunction();
+
+final Pointer<Utf8> Function(Pointer<Void> wrappedTextRun) _textValueRunName =
+    nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+            'textValueRunName')
+        .asFunction();
+
+final Pointer<Utf8> Function(Pointer<Void> wrappedTextRun) _textValueRunText =
+    nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+            'textValueRunText')
+        .asFunction();
+
+final Pointer<Utf8> Function(Pointer<Void> wrappedTextRun) _textValueRunPath =
+    nativeLib
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+            'textValueRunPath')
+        .asFunction();
+
+final void Function(Pointer<Void> wrappedTextRun, Pointer<Void> text)
+    _textValueRunSetText = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'textValueRunSetText')
+        .asFunction();
+
 abstract class _NativeFile {
   static final int Function(Pointer<Void> file) viewModelCount = nativeLib
       .lookup<NativeFunction<Uint64 Function(Pointer<Void>)>>(
@@ -1478,14 +1529,19 @@ abstract class _NativeVMIArtboardRuntime {
 final Pointer<Float> _floatQueryBuffer =
     calloc.allocate<Float>(sizeOf<Float>() * 6);
 
-sealed class FFIFileAsset implements FileAssetInterface, RiveFFIReference {
+sealed class FFIFileAsset
+    implements FileAssetInterface, RiveFFIReference, Finalizable {
+  static final _finalizer = NativeFinalizer(_deleteFileAssetNative);
+
   @override
   Pointer<Void> get pointer => _pointer;
 
-  final Pointer<Void> _pointer;
+  Pointer<Void> _pointer;
   final Factory _riveFactory;
 
-  FFIFileAsset(this._pointer, this._riveFactory);
+  FFIFileAsset(this._pointer, this._riveFactory) {
+    _finalizer.attach(this, _pointer.cast(), detach: this);
+  }
 
   @override
   int get assetId => _riveFileAssetId(pointer);
@@ -1506,6 +1562,16 @@ sealed class FFIFileAsset implements FileAssetInterface, RiveFFIReference {
 
   @override
   Factory get riveFactory => _riveFactory;
+
+  @override
+  void dispose() {
+    if (_pointer == nullptr) {
+      return;
+    }
+    _finalizer.detach(this);
+    _deleteFileAsset(_pointer);
+    _pointer = nullptr;
+  }
 }
 
 class FFIUnknownAsset extends FFIFileAsset implements UnknownAsset {
@@ -1538,7 +1604,9 @@ class FFIImageAsset extends FFIFileAsset implements ImageAsset {
     if (decodedImage == null) {
       return false;
     }
-    return renderImage(decodedImage);
+    final result = renderImage(decodedImage);
+    decodedImage.dispose();
+    return result;
   }
 }
 
@@ -1557,7 +1625,9 @@ class FFIFontAsset extends FFIFileAsset implements FontAsset {
     if (decodedFont == null) {
       return Future.value(false);
     }
-    return font(decodedFont);
+    final result = font(decodedFont);
+    decodedFont.dispose();
+    return result;
   }
 }
 
@@ -1578,7 +1648,9 @@ class FFIAudioAsset extends FFIFileAsset implements AudioAsset {
     if (decodedAudio == null) {
       return false;
     }
-    return audio(decodedAudio);
+    final result = audio(decodedAudio);
+    decodedAudio.dispose();
+    return result;
   }
 }
 
@@ -3204,6 +3276,32 @@ class FFIRiveArtboard extends Artboard
   bool hasComponentDirt() {
     return _riveArtboardHasComponentDirt(pointer);
   }
+
+  @override
+  List<TextValueRunRuntime> get textRuns {
+    final countPtr = calloc<Int>();
+    final arrayPtr = _artboardGetAllTextRuns(pointer, countPtr);
+    final count = countPtr.value;
+    calloc.free(countPtr);
+
+    if (arrayPtr == nullptr || count == 0) {
+      if (arrayPtr != nullptr) {
+        _freeTextRunsArray(arrayPtr);
+      }
+      return [];
+    }
+
+    final textRuns = <TextValueRunRuntime>[];
+    for (int i = 0; i < count; i++) {
+      final wrappedTextRunPtr = arrayPtr[i];
+      if (wrappedTextRunPtr != nullptr) {
+        textRuns.add(FFITextValueRun(wrappedTextRunPtr));
+      }
+    }
+
+    _freeTextRunsArray(arrayPtr);
+    return textRuns;
+  }
 }
 
 class FFIBindableArtboard extends BindableArtboard
@@ -3710,6 +3808,43 @@ class FFIComponent extends Component implements RiveFFIReference, Finalizable {
         worldTransform[4],
         worldTransform[5],
       );
+}
+
+class FFITextValueRun extends TextValueRunRuntime implements Finalizable {
+  static final _finalizer = NativeFinalizer(_deleteTextValueRunNative);
+
+  Pointer<Void> get pointer => _pointer;
+  Pointer<Void> _pointer;
+
+  FFITextValueRun(this._pointer) {
+    _finalizer.attach(this, _pointer.cast(), detach: this);
+  }
+
+  @override
+  String get name => safeString(_textValueRunName(pointer));
+
+  @override
+  String get text => safeString(_textValueRunText(pointer));
+
+  @override
+  String get path => safeString(_textValueRunPath(pointer));
+
+  @override
+  set text(String value) {
+    final nativeString = value.toNativeUtf8();
+    _textValueRunSetText(pointer, nativeString.cast());
+    malloc.free(nativeString);
+  }
+
+  @override
+  void dispose() {
+    if (_pointer == nullptr) {
+      return;
+    }
+    _finalizer.detach(this);
+    _deleteTextValueRun(_pointer);
+    _pointer = nullptr;
+  }
 }
 
 class FFIAnimation extends Animation implements RiveFFIReference, Finalizable {

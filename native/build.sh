@@ -92,6 +92,11 @@ for var in "$@"; do
     if [[ $var = "no-audio" ]]; then
         RIVE_AUDIO=disabled
     fi
+    if [[ $var = "with-scripting" ]]; then
+        # Explicitly enable scripting even with flutter-runtime.
+        # Useful for peon workers that need scripting but not the full editor.
+        SCRIPTING_FLAG="--with_rive_scripting"
+    fi
 done
 
 if [[ $OS = "wasm" ]]; then
@@ -183,11 +188,13 @@ if [[ $machine = "windows" ]]; then
     EXTRA_OUT=_shared
 fi
 
-if [[ $FLUTTER_RUNTIME = "" ]]; then
-    SCRIPTING_FLAG="--with_rive_scripting"
-else
-    SCRIPTING_FLAG=""
+# Only set SCRIPTING_FLAG if not already explicitly set (via with-scripting arg)
+if [[ -z "$SCRIPTING_FLAG" ]]; then
+    if [[ $FLUTTER_RUNTIME = "" ]]; then
+        SCRIPTING_FLAG="--with_rive_scripting"
+    fi
 fi
+
 RIVE_NATIVE_PREMAKE_COMMANDS="$SCRIPTING_FLAG --with_rive_text --with_rive_tools --with_rive_layout --with_rive_audio=$RIVE_AUDIO $CONFIG --variant=$VARIANT $COMPAT $KIND $FLUTTER_RUNTIME $NO_LTO $CROSS_COMPILE_OS"
 
 make_rive_native_plugin() {
@@ -274,7 +281,11 @@ elif [[ $machine = "linux" ]]; then
             else
                 cp ../../scripting_workspace/formatter/target/x86_64-unknown-linux-gnu/minimize/libstylua_ffi.a $(out_dir linux x64)
             fi
-
+            # Mark that we have real scripting support (not dummy libs)
+            touch ../linux/rive_marker_linux_scripting
+        else
+            # Remove scripting marker if it exists from a previous editor build
+            rm -f ../linux/rive_marker_linux_scripting
         fi
         cp -R $(out_dir $machine $LINUX_ARCH)/*.a $COPY_TO
         du -hs $COPY_TO/librive_native.a

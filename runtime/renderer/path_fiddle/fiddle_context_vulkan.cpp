@@ -45,7 +45,12 @@ public:
                                                         : VK_API_VERSION_1_3,
             .requiredExtensions = make_span(glfwExtensions, glfwExtensionCount),
 #ifndef NDEBUG
-            .wantValidationLayers = options.enableVulkanValidationLayers,
+            .desiredValidationType =
+                options.enableVulkanCoreValidationLayers
+                    ? VulkanValidationType::core
+                    : (options.enableVulkanSynchronizationValidationLayers
+                           ? VulkanValidationType::synchronization
+                           : VulkanValidationType::none),
             .wantDebugCallbacks = !options.disableDebugCallbacks,
 #endif
         });
@@ -157,8 +162,8 @@ public:
                     {
                         .format = m_options.srgb ? VK_FORMAT_R8G8B8A8_SRGB
                                   : m_options.coreFeaturesOnly
-                                      ? VK_FORMAT_R8G8B8A8_UNORM
-                                      : VK_FORMAT_B8G8R8A8_UNORM,
+                                      ? VK_FORMAT_B8G8R8A8_UNORM
+                                      : VK_FORMAT_R8G8B8A8_UNORM,
                         .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
                     },
 
@@ -179,6 +184,9 @@ public:
                     VK_PRESENT_MODE_FIFO_RELAXED_KHR,
                     VK_PRESENT_MODE_FIFO_KHR,
                 },
+            .imageUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             .initialFrameNumber = currentFrameNumber,
         };
 
@@ -187,15 +195,13 @@ public:
              VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
         {
             swapOpts.imageUsageFlags |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-            if (m_options.enableReadPixels)
-            {
-                swapOpts.imageUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-            }
         }
-        else
+
+        if (!m_options.coreFeaturesOnly &&
+            (windowCapabilities.supportedUsageFlags &
+             VK_IMAGE_USAGE_STORAGE_BIT))
         {
-            swapOpts.imageUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            swapOpts.imageUsageFlags |= VK_IMAGE_USAGE_STORAGE_BIT;
         }
 
         m_swapchain =
@@ -264,7 +270,10 @@ public:
         auto lastAccess = m_renderTarget->targetLastAccess();
         if (pixelData != nullptr)
         {
-            m_swapchain->queueImageCopy(&lastAccess);
+            m_swapchain->queueImageCopy(
+                &lastAccess,
+                rive::IAABB::MakeWH(m_renderTarget->width(),
+                                    m_renderTarget->height()));
         }
         m_swapchain->endFrame(lastAccess);
 

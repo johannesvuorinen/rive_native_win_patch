@@ -353,6 +353,27 @@ private:
     rcp<WrappedStateMachine> m_wrappedMachine;
 };
 
+class WrappedTextValueRun
+{
+public:
+    WrappedTextValueRun(rcp<WrappedArtboard> artboard,
+                        TextValueRun* textValueRun,
+                        const std::string& path = "") :
+        m_textValueRun(textValueRun), m_wrappedArtboard(artboard), m_path(path)
+    {}
+
+    ~WrappedTextValueRun() {}
+
+    TextValueRun* textValueRun() { return m_textValueRun; }
+
+    const std::string& path() const { return m_path; }
+
+private:
+    rive::TextValueRun* m_textValueRun;
+    rcp<WrappedArtboard> m_wrappedArtboard;
+    std::string m_path;
+};
+
 class WrappedEvent : public RefCnt<WrappedEvent>
 {
 public:
@@ -590,6 +611,7 @@ EXPORT WasmPtr loadRiveFile(WasmPtr bufferPtr,
         {
             if (!m_callback.isNull())
             {
+                asset.ref();
                 return m_callback((WasmPtr)(&asset),
                                   (WasmPtr)(inBandBytes.data()),
                                   inBandBytes.size())
@@ -638,6 +660,7 @@ EXPORT void* loadRiveFile(const uint8_t* bytes,
         {
             if (m_callback != nullptr)
             {
+                asset.ref();
                 return m_callback(&asset,
                                   inBandBytes.data(),
                                   inBandBytes.size());
@@ -659,6 +682,16 @@ EXPORT void* loadRiveFile(const uint8_t* bytes,
     return nullptr;
 }
 #endif
+
+EXPORT void deleteFileAsset(FileAsset* fileAsset)
+{
+    if (fileAsset == nullptr)
+    {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(g_deleteMutex);
+    fileAsset->unref();
+}
 
 EXPORT void deleteRiveFile(File* file)
 {
@@ -2408,7 +2441,7 @@ EXPORT void componentSetLocalFromWorld(WrappedComponent* wrappedComponent,
         bone->y(components.y());
     }
     component->scaleX(components.scaleX());
-    component->scaleX(components.scaleX());
+    component->scaleY(components.scaleY());
     component->rotation(components.rotation());
 }
 
@@ -2900,6 +2933,194 @@ EXPORT const char* artboardGetText(WrappedArtboard* wrappedArtboard,
         return nullptr;
     }
     return textRun->text().c_str();
+}
+
+struct TextRunWithPath
+{
+    TextValueRun* textRun;
+    std::string path;
+};
+
+// Helper to recursively collect text runs from an artboard and all nested
+// artboards
+static void collectTextRunsRecursive(ArtboardInstance* artboard,
+                                     WrappedArtboard* wrappedArtboard,
+                                     std::vector<TextRunWithPath>& allTextRuns,
+                                     const std::string& currentPath)
+{
+    if (!artboard)
+    {
+        return;
+    }
+    std::vector<TextValueRun*> textRuns = artboard->find<TextValueRun>();
+    for (auto* textRun : textRuns)
+    {
+        allTextRuns.push_back({textRun, currentPath});
+    }
+    std::vector<NestedArtboard*> nestedArtboards =
+        artboard->find<NestedArtboard>();
+    for (auto* nestedArtboard : nestedArtboards)
+    {
+        if (nestedArtboard)
+        {
+            ArtboardInstance* nestedInstance =
+                nestedArtboard->artboardInstance();
+            if (nestedInstance)
+            {
+                std::string nestedPath = currentPath;
+                if (!nestedPath.empty())
+                {
+                    nestedPath += "/";
+                }
+                nestedPath += nestedArtboard->name();
+
+                collectTextRunsRecursive(nestedInstance,
+                                         wrappedArtboard,
+                                         allTextRuns,
+                                         nestedPath);
+            }
+        }
+    }
+}
+
+static WrappedTextValueRun** getAllTextRunsImpl(
+    WrappedArtboard* wrappedArtboard,
+    int* count)
+{
+    if (wrappedArtboard == nullptr || count == nullptr)
+    {
+        if (count)
+            *count = 0;
+        return nullptr;
+    }
+
+    auto artboard = wrappedArtboard->artboard();
+    if (!artboard)
+    {
+        *count = 0;
+        return nullptr;
+    }
+
+    std::vector<TextRunWithPath> allTextRuns;
+    collectTextRunsRecursive(artboard, wrappedArtboard, allTextRuns, "");
+
+    *count = static_cast<int>(allTextRuns.size());
+    if (allTextRuns.empty())
+    {
+        return nullptr;
+    }
+
+    // Caller is responsible for freeing the array and deleting each wrapper
+    WrappedTextValueRun** arr = (WrappedTextValueRun**)std::malloc(
+        sizeof(WrappedTextValueRun*) * allTextRuns.size());
+    if (!arr)
+    {
+        *count = 0;
+        return nullptr;
+    }
+    for (size_t i = 0; i < allTextRuns.size(); ++i)
+    {
+        arr[i] = new WrappedTextValueRun(ref_rcp(wrappedArtboard),
+                                         allTextRuns[i].textRun,
+                                         allTextRuns[i].path);
+    }
+    return arr;
+}
+
+#ifdef __EMSCRIPTEN__
+// WASM-specific struct to return array pointer and count together
+struct TextRunArrayResult
+{
+    WasmPtr array;
+    int count;
+};
+
+EXPORT TextRunArrayResult artboardGetAllTextRuns(WasmPtr artboardPtr)
+{
+    WrappedArtboard* wrappedArtboard = (WrappedArtboard*)artboardPtr;
+    int count = 0;
+    WrappedTextValueRun** arr = getAllTextRunsImpl(wrappedArtboard, &count);
+    TextRunArrayResult result;
+    result.array = (WasmPtr)arr;
+    result.count = count;
+    return result;
+}
+#else
+// Native FFI version: Uses output parameter for count
+EXPORT WrappedTextValueRun** artboardGetAllTextRuns(
+    WrappedArtboard* wrappedArtboard,
+    int* count)
+{
+    return getAllTextRunsImpl(wrappedArtboard, count);
+}
+#endif
+
+// Frees the array allocated by artboardGetAllTextRuns (but not the individual
+// wrappers)
+EXPORT void freeTextRunsArray(WrappedTextValueRun** arr)
+{
+    if (arr != nullptr)
+    {
+        std::free(arr);
+    }
+}
+
+// Helper function for WASM to get an element from the text runs array
+EXPORT WrappedTextValueRun* getTextRunFromArray(WrappedTextValueRun** arr,
+                                                int index)
+{
+    if (arr == nullptr)
+    {
+        return nullptr;
+    }
+    return arr[index];
+}
+
+EXPORT void deleteTextValueRun(WrappedTextValueRun* wrappedTextRun)
+{
+    if (wrappedTextRun == nullptr)
+    {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(g_deleteMutex);
+    delete wrappedTextRun;
+}
+
+EXPORT const char* textValueRunName(WrappedTextValueRun* wrappedTextRun)
+{
+    if (wrappedTextRun == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedTextRun->textValueRun()->name().c_str();
+}
+
+EXPORT const char* textValueRunText(WrappedTextValueRun* wrappedTextRun)
+{
+    if (wrappedTextRun == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedTextRun->textValueRun()->text().c_str();
+}
+
+EXPORT void textValueRunSetText(WrappedTextValueRun* wrappedTextRun,
+                                const char* text)
+{
+    if (wrappedTextRun == nullptr || text == nullptr)
+    {
+        return;
+    }
+    wrappedTextRun->textValueRun()->text(std::string(text));
+}
+
+EXPORT const char* textValueRunPath(WrappedTextValueRun* wrappedTextRun)
+{
+    if (wrappedTextRun == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedTextRun->path().c_str();
 }
 
 EXPORT const char* stateMachineInstanceName(WrappedStateMachine* wrappedMachine)
@@ -4909,6 +5130,11 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
     function("setArtboardIsAncestorCallback", &setArtboardIsAncestorCallback);
     function("setArtboardRootTransformCallback",
              &setArtboardRootTransformCallback);
+    function("artboardGetAllTextRuns", &artboardGetAllTextRuns);
+
+    value_object<TextRunArrayResult>("TextRunArrayResult")
+        .field("array", &TextRunArrayResult::array)
+        .field("count", &TextRunArrayResult::count);
 
     value_object<FlutterRuntimeReportedEvent>("FlutterRuntimeReportedEvent")
         .field("event", &FlutterRuntimeReportedEvent::event)

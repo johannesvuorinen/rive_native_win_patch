@@ -22,6 +22,8 @@ public:
         const char* gpuNameFilter = nullptr;
         bool headless = false;
 
+        uint32_t minimumSupportedAPIVersion = VK_API_VERSION_1_0;
+
         // If this is set to a valid surface (and not a headless device), device
         // discovery will test for present compatibility to this surface
         VkSurfaceKHR presentationSurfaceForDeviceSelection = VK_NULL_HANDLE;
@@ -59,21 +61,37 @@ public:
         return m_graphicsQueueFamilyIndex;
     }
 
+    static bool hasSupportedDevice(VulkanInstance&,
+                                   uint32_t minimumSupportedAPIVersion);
+
+    const std::string& name() const { return m_name; }
+
 private:
     struct FindDeviceResult
     {
         VkPhysicalDevice physicalDevice;
         std::string deviceName;
         VkPhysicalDeviceType deviceType;
+        uint32_t deviceAPIVersion;
+        uint32_t driverVersionMajor;
+        uint32_t driverVersionMinor;
+        uint32_t driverVersionPatch;
     };
 
-    FindDeviceResult findCompatiblePhysicalDevice(
+    static FindDeviceResult findCompatiblePhysicalDevice(
         VulkanInstance&,
         const char* nameFilter,
-        VkSurfaceKHR optionalSurfaceForValidation);
+        VkSurfaceKHR optionalSurfaceForValidation,
+        uint32_t minimumSupportedAPIVersion);
 
     std::optional<VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>
     tryEnableRasterOrderFeatures(
+        VulkanInstance&,
+        const std::vector<VkExtensionProperties>& supportedExtensions,
+        std::vector<const char*>& extensions);
+
+    std::optional<VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT>
+    tryEnableInterlockFeatures(
         VulkanInstance&,
         const std::vector<VkExtensionProperties>& supportedExtensions,
         std::vector<const char*>& extensions);
@@ -84,6 +102,7 @@ private:
         std::vector<const char*>& extensions);
 
     std::vector<VkQueueFamilyProperties> m_queueFamilyProperties;
+    std::string m_name;
 
     VkPhysicalDevice m_physicalDevice;
     VkDevice m_device;

@@ -94,7 +94,9 @@ rive::Factory* riveFactory() { return nullptr; }
 EXPORT void rewindRenderPath(rive::RenderPath* path);
 EXPORT void* disposeYogaStyle(void* style);
 EXPORT void riveFontDummyLinker();
-
+#ifdef RIVE_WITH_SCRIPTING
+EXPORT void riveLuaDummyLinker();
+#endif
 EXPORT void stopAudioSound(rive::AudioSound* sound, uint64_t timeInFrames);
 
 void rive_native_plugin_register_with_registrar(FlPluginRegistrar* registrar)
@@ -120,5 +122,8 @@ void rive_native_plugin_register_with_registrar(FlPluginRegistrar* registrar)
     rewindRenderPath(nullptr);
     disposeYogaStyle(nullptr);
     riveFontDummyLinker();
+#ifdef RIVE_WITH_SCRIPTING
+    riveLuaDummyLinker();
+#endif
     stopAudioSound(nullptr, 0);
 }

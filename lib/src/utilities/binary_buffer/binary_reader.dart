@@ -102,6 +102,9 @@ class BinaryReader {
   /// bytes.
   String readString({bool explicitLength = true}) {
     int length = explicitLength ? readVarUint() : buffer.lengthInBytes;
+    if (length == 0) {
+      return '';
+    }
     late Uint8List bytes;
     if (kIsWeb) {
       // This is to workaround SharedArrayBuffer no longer working with methods

@@ -1,25 +1,26 @@
 #include "rive/shapes/paint/trim_path.hpp"
-#include "rive/shapes/paint/stroke.hpp"
+#include "rive/shapes/paint/shape_paint.hpp"
 #include "rive/profiler/profiler_macros.h"
 using namespace rive;
 
 StatusCode TrimPath::onAddedClean(CoreContext* context)
 {
-    if (!parent()->is<Stroke>())
+    if (!parent()->is<ShapePaint>())
     {
         return StatusCode::InvalidObject;
     }
 
-    parent()->as<Stroke>()->addStrokeEffect(this);
+    parent()->as<ShapePaint>()->addStrokeEffect(this);
 
     return StatusCode::Ok;
 }
 
-void TrimPath::trimPath(const RawPath* source)
+void TrimPath::trimPath(const RawPath* source, ShapePaintType shapePaintType)
 {
     RIVE_PROF_SCOPE()
     auto rawPath = m_path.mutableRawPath();
     auto renderOffset = std::fmod(std::fmod(offset(), 1.0f) + 1.0f, 1.0f);
+    auto closeShape = shapePaintType == ShapePaintType::fill;
 
     // Build up contours if they're empty.
     if (m_contours.empty())
@@ -112,9 +113,10 @@ void TrimPath::trimPath(const RawPath* source)
                                         !contour->isClosed());
                 // Close contours that are fully used as
                 // segments
-                if (startLength == 0.0f &&
-                    endLength - startLength >= contourLength &&
-                    contour->isClosed())
+                if ((startLength == 0.0f &&
+                     endLength - startLength >= contourLength &&
+                     contour->isClosed()) ||
+                    closeShape)
                 {
                     rawPath->close();
                 }
@@ -155,7 +157,8 @@ void TrimPath::trimPath(const RawPath* source)
                                         !contour->isClosed());
                 }
 
-                if (start() == 0.0f && end() == 1.0f && contour->isClosed())
+                if ((start() == 0.0f && end() == 1.0f && contour->isClosed()) ||
+                    closeShape)
                 {
                     rawPath->close();
                 }
@@ -169,27 +172,17 @@ void TrimPath::trimPath(const RawPath* source)
 
 void TrimPath::invalidateEffect()
 {
-    invalidateTrim();
+    StrokeEffect::invalidateEffect();
+    m_path.rewind();
     // This is usually sent when the path is changed so we need to also
     // invalidate the contours, not just the trim effect.
     m_contours.clear();
 }
 
-void TrimPath::invalidateTrim()
-{
-    m_path.rewind();
-    if (parent() != nullptr)
-    {
-        auto stroke = parent()->as<Stroke>();
-        stroke->parent()->addDirt(ComponentDirt::Paint);
-        stroke->invalidateRendering();
-    }
-}
-
-void TrimPath::startChanged() { invalidateTrim(); }
-void TrimPath::endChanged() { invalidateTrim(); }
-void TrimPath::offsetChanged() { invalidateTrim(); }
-void TrimPath::modeValueChanged() { invalidateTrim(); }
+void TrimPath::startChanged() { invalidateEffectFromLocal(); }
+void TrimPath::endChanged() { invalidateEffectFromLocal(); }
+void TrimPath::offsetChanged() { invalidateEffectFromLocal(); }
+void TrimPath::modeValueChanged() { invalidateEffectFromLocal(); }
 
 StatusCode TrimPath::onAddedDirty(CoreContext* context)
 {
@@ -207,7 +200,8 @@ StatusCode TrimPath::onAddedDirty(CoreContext* context)
     return StatusCode::InvalidObject;
 }
 
-void TrimPath::updateEffect(const ShapePaintPath* source)
+void TrimPath::updateEffect(const ShapePaintPath* source,
+                            ShapePaintType shapePaintType)
 {
     if (m_path.hasRenderPath())
     {
@@ -215,7 +209,7 @@ void TrimPath::updateEffect(const ShapePaintPath* source)
         return;
     }
     m_path.rewind(source->isLocal(), source->fillRule());
-    trimPath(source->rawPath());
+    trimPath(source->rawPath(), shapePaintType);
 }
 
 ShapePaintPath* TrimPath::effectPath() { return &m_path; }

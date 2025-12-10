@@ -17,11 +17,12 @@ class _ExampleOutOfBandAssetsState extends State<ExampleOutOfBandAssets> {
   String assetUniqueName(rive.FileAsset asset) =>
       '${asset.name}-${asset.assetId}';
 
-  Future<ByteData> loadBundleAsset(rive.FileAsset asset) async {
-    return rootBundle.load("assets/${asset.uniqueFilename}");
+  Future<Uint8List> loadBundleAsset(rive.FileAsset asset) async {
+    final data = await rootBundle.load("assets/${asset.uniqueFilename}");
+    return Uint8List.sublistView(data);
   }
 
-  Future<ByteData?> loadCDNAsset(rive.FileAsset asset) async {
+  Future<Uint8List?> loadCDNAsset(rive.FileAsset asset) async {
     final url = '${asset.cdnBaseUrl}/${asset.cdnUuid}';
     final res = await http.get(Uri.parse(url));
 
@@ -31,22 +32,15 @@ class _ExampleOutOfBandAssetsState extends State<ExampleOutOfBandAssets> {
       return null;
     }
 
-    return ByteData.view(res.bodyBytes.buffer);
+    return res.bodyBytes;
   }
 
-  Future<ByteData?> loadAsset(rive.FileAsset asset) async {
-    ByteData bytes;
-
+  Future<Uint8List?> loadAsset(rive.FileAsset asset) async {
     if (asset.cdnUuid.isNotEmpty) {
-      final result = await loadCDNAsset(asset);
-      if (result == null) {
-        return null;
-      }
-      bytes = result;
+      return await loadCDNAsset(asset);
     } else {
-      bytes = await loadBundleAsset(asset);
+      return await loadBundleAsset(asset);
     }
-    return bytes;
   }
 
   Future<void> loadImage(
@@ -55,11 +49,13 @@ class _ExampleOutOfBandAssetsState extends State<ExampleOutOfBandAssets> {
     if (bytes == null) {
       return;
     }
-    final image = await riveFactory.decodeImage(bytes.buffer.asUint8List());
+    final image = await riveFactory.decodeImage(bytes);
 
     if (image != null) {
       imageAsset.renderImage(image);
+      // Dispose the image and the image asset immediately. Otherwise, wait for garbage collection.
       image.dispose();
+      imageAsset.dispose();
     }
   }
 
@@ -69,11 +65,13 @@ class _ExampleOutOfBandAssetsState extends State<ExampleOutOfBandAssets> {
     if (bytes == null) {
       return;
     }
-    final font = await riveFactory.decodeFont(Uint8List.view(bytes.buffer));
+    final font = await riveFactory.decodeFont(bytes);
 
     if (font != null) {
       fontAsset.font(font);
+      // Dispose the font and the font asset immediately. Otherwise, wait for garbage collection.
       font.dispose();
+      fontAsset.dispose();
     }
   }
 
@@ -83,11 +81,12 @@ class _ExampleOutOfBandAssetsState extends State<ExampleOutOfBandAssets> {
     if (bytes == null) {
       return;
     }
-    final audioSource =
-        await riveFactory.decodeAudio(Uint8List.view(bytes.buffer));
+    final audioSource = await riveFactory.decodeAudio(bytes);
     if (audioSource != null) {
       audioAsset.audio(audioSource);
+      // Dispose the audio source and the audio asset immediately. Otherwise, wait for garbage collection.
       audioSource.dispose();
+      audioAsset.dispose();
     }
   }
 

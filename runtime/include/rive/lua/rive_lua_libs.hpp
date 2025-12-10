@@ -7,24 +7,29 @@
 #include "rive/math/raw_path.hpp"
 #include "rive/renderer.hpp"
 #include "rive/math/vec2d.hpp"
+#include "rive/math/contour_measure.hpp"
+#include "rive/math/path_measure.hpp"
 #include "rive/shapes/paint/image_sampler.hpp"
 #include "rive/viewmodel/viewmodel_instance_boolean.hpp"
 #include "rive/viewmodel/viewmodel_instance_color.hpp"
 #include "rive/viewmodel/viewmodel_instance_enum.hpp"
 #include "rive/viewmodel/viewmodel_instance_value.hpp"
 #include "rive/viewmodel/viewmodel_instance_viewmodel.hpp"
+#include "rive/viewmodel/viewmodel_instance_color.hpp"
 #include "rive/viewmodel/viewmodel_instance_number.hpp"
 #include "rive/viewmodel/viewmodel_instance_string.hpp"
 #include "rive/viewmodel/viewmodel_instance_trigger.hpp"
 #include "rive/viewmodel/viewmodel_instance_list.hpp"
 #include "rive/data_bind/data_values/data_value.hpp"
 #include "rive/data_bind/data_values/data_value_boolean.hpp"
+#include "rive/data_bind/data_values/data_value_color.hpp"
 #include "rive/data_bind/data_values/data_value_number.hpp"
 #include "rive/data_bind/data_values/data_value_string.hpp"
 #include "rive/viewmodel/viewmodel.hpp"
 #include "rive/artboard.hpp"
 #include "rive/file.hpp"
 #include "rive/animation/state_machine_instance.hpp"
+#include "rive/hit_result.hpp"
 
 #include <chrono>
 #include <unordered_map>
@@ -38,7 +43,7 @@ namespace rive
 class Factory;
 enum class LuaAtoms : int16_t
 {
-    // Vec2D
+    // Vector
     length,
     lengthSquared,
     normalized,
@@ -55,6 +60,12 @@ enum class LuaAtoms : int16_t
     close,
     reset,
     add,
+    contours,
+    measure,
+
+    // Path Command
+    type,
+    points,
 
     // Mat2D
     invert,
@@ -116,8 +127,16 @@ enum class LuaAtoms : int16_t
 
     // Scripted Properties
     value,
+    red,
+    green,
+    blue,
+    alpha,
     getNumber,
     getTrigger,
+    getString,
+    getBoolean,
+    getColor,
+    getList,
     addListener,
     removeListener,
     fire,
@@ -128,11 +147,44 @@ enum class LuaAtoms : int16_t
     frameOrigin,
     data,
     instance,
+    bounds,
+    pointerDown,
+    pointerMove,
+    pointerUp,
+    pointerExit,
+    addToPath,
 
     // Scripted DataValues
     isNumber,
     isString,
-    isBoolean
+    isBoolean,
+    isColor,
+
+    // inputs
+    hit,
+    id,
+    position,
+
+    // nodes
+    rotation,
+    scale,
+    worldTransform,
+    scaleX,
+    scaleY,
+    decompose,
+    children,
+    parent,
+    node,
+
+    // PathMeasure/ContourMeasure
+    positionAndTangent,
+    warp,
+    extract,
+    next,
+    isClosed,
+
+    // Scripted Context
+    markNeedsUpdate,
 };
 
 struct ScriptedMat2D
@@ -153,21 +205,52 @@ struct ScriptedMat2D
 static_assert(std::is_trivially_destructible<ScriptedMat2D>::value,
               "ScriptedMat2D must be trivially destructible");
 
-class ScriptedPath
+class ScriptedPathCommand
 {
 public:
+    ScriptedPathCommand(std::string type, std::vector<Vec2D> points = {}) :
+        m_type(type), m_points(points)
+    {}
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 29;
+    static constexpr const char* luaName = "PathCommand";
+    static constexpr bool hasMetatable = true;
+    std::string type() { return m_type; }
+    std::vector<Vec2D> points() { return m_points; }
+
+private:
+    std::string m_type;
+    std::vector<Vec2D> m_points;
+};
+
+class ScriptedPathData
+{
+public:
+    ScriptedPathData() {}
+    ScriptedPathData(const RawPath* path);
+    int totalCommands();
+    void markDirty() { m_isRenderPathDirty = true; }
     RawPath rawPath;
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 30;
+    static constexpr const char* luaName = "PathData";
+    static constexpr bool hasMetatable = true;
+
+protected:
+    rcp<RenderPath> m_renderPath;
+
+    bool m_isRenderPathDirty = true;
+};
+
+class ScriptedPath : public ScriptedPathData
+{
+public:
+    ScriptedPath() {}
+    ScriptedPath(const RawPath* path) : ScriptedPathData(path) {}
     RenderPath* renderPath(lua_State* L);
     static constexpr uint8_t luaTag = LUA_T_COUNT + 2;
     static constexpr const char* luaName = "Path";
     static constexpr bool hasMetatable = true;
 
-    void markDirty() { m_isRenderPathDirty = true; }
-
 private:
-    rcp<RenderPath> m_renderPath;
-
-    bool m_isRenderPathDirty = true;
 };
 
 class ScriptedGradient
@@ -333,40 +416,58 @@ private:
     uint32_t m_saveCount = 0;
 };
 
-class ScriptedArtboard
+class ScriptReffedArtboard : public RefCnt<ScriptReffedArtboard>
 {
 public:
-    ScriptedArtboard(rcp<File> file,
-                     std::unique_ptr<ArtboardInstance>&& artboardInstance);
+    ScriptReffedArtboard(rcp<File> file,
+                         std::unique_ptr<ArtboardInstance>&& artboardInstance);
 
-    ~ScriptedArtboard()
-    {
-        // Make sure artboard is deleted before file.
-        m_artboard = nullptr;
-        m_file = nullptr;
-    }
-
-    static constexpr uint8_t luaTag = LUA_T_COUNT + 10;
-    static constexpr const char* luaName = "Artboard";
-    static constexpr bool hasMetatable = true;
-
+    ~ScriptReffedArtboard();
+    rive::rcp<rive::File> file() { return m_file; }
     Artboard* artboard() { return m_artboard.get(); }
-    int pushData(lua_State* L);
-    int instance(lua_State* L);
-
-    bool advance(float seconds);
+    StateMachineInstance* stateMachine() { return m_stateMachine.get(); }
+    rcp<ViewModelInstance> viewModelInstance() { return m_viewModelInstance; }
 
 private:
     rcp<File> m_file;
     std::unique_ptr<ArtboardInstance> m_artboard;
     std::unique_ptr<StateMachineInstance> m_stateMachine;
     rcp<ViewModelInstance> m_viewModelInstance;
-    int m_dataRef = 0;
-    // std::vector<WrappedDataBind*> m_dataBinds;
+};
 
-    // for parent data context
-    // internalDataContext()
-    // bindViewModelInstance on state machine
+class ScriptedArtboard
+{
+public:
+    ScriptedArtboard(rcp<File> file,
+                     std::unique_ptr<ArtboardInstance>&& artboardInstance);
+
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 10;
+    static constexpr const char* luaName = "Artboard";
+    static constexpr bool hasMetatable = true;
+
+    Artboard* artboard() { return m_scriptReffedArtboard->artboard(); }
+    StateMachineInstance* stateMachine()
+    {
+        return m_scriptReffedArtboard->stateMachine();
+    }
+    rcp<ViewModelInstance> viewModelInstance()
+    {
+        return m_scriptReffedArtboard->viewModelInstance();
+    }
+
+    rcp<ScriptReffedArtboard> scriptReffedArtboard()
+    {
+        return m_scriptReffedArtboard;
+    }
+
+    int pushData(lua_State* L);
+    int instance(lua_State* L);
+
+    bool advance(float seconds);
+
+private:
+    rcp<ScriptReffedArtboard> m_scriptReffedArtboard;
+    int m_dataRef = 0;
 };
 
 struct ScriptedListener
@@ -658,6 +759,7 @@ public:
     virtual bool isNumber() { return false; }
     virtual bool isString() { return false; }
     virtual bool isBoolean() { return false; }
+    virtual bool isColor() { return false; }
 
     const lua_State* state() const { return m_state; }
 
@@ -704,6 +806,101 @@ public:
     static constexpr uint8_t luaTag = LUA_T_COUNT + 22;
     static constexpr const char* luaName = "DataValueBoolean";
     bool isBoolean() override { return true; }
+};
+
+class ScriptedDataValueColor : public ScriptedDataValue
+{
+public:
+    ScriptedDataValueColor(lua_State* L, int value) : ScriptedDataValue(L)
+    {
+        m_dataValue = new DataValueColor(value);
+    }
+    static constexpr bool hasMetatable = true;
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 23;
+    static constexpr const char* luaName = "DataValueColor";
+    bool isColor() override { return true; }
+};
+
+class ScriptedPointerEvent
+{
+public:
+    ScriptedPointerEvent(uint8_t id, Vec2D position) :
+        m_id(id), m_position(position)
+    {}
+
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 24;
+    static constexpr const char* luaName = "PointerEvent";
+    static constexpr bool hasMetatable = true;
+
+    uint8_t m_id = 0;
+    Vec2D m_position;
+    HitResult m_hitResult = HitResult::none;
+};
+
+class ScriptedNode
+{
+public:
+    ScriptedNode(rcp<ScriptReffedArtboard> artboard,
+                 TransformComponent* component);
+
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 25;
+    static constexpr const char* luaName = "NodeData";
+    static constexpr bool hasMetatable = true;
+
+    TransformComponent* component() { return m_component; }
+    rcp<ScriptReffedArtboard> artboard() { return m_artboard; }
+
+private:
+    rcp<ScriptReffedArtboard> m_artboard;
+    TransformComponent* m_component;
+};
+
+class ScriptedContourMeasure
+{
+public:
+    ScriptedContourMeasure(rcp<ContourMeasure> measure,
+                           rcp<RefCntContourMeasureIter> iter) :
+        m_measure(measure), m_iter(iter)
+    {}
+
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 26;
+    static constexpr const char* luaName = "ContourMeasure";
+    static constexpr bool hasMetatable = true;
+
+    ContourMeasure* measure() { return m_measure.get(); }
+    rcp<RefCntContourMeasureIter> iter() { return m_iter; }
+
+private:
+    rcp<ContourMeasure> m_measure;
+    rcp<RefCntContourMeasureIter> m_iter;
+};
+
+class ScriptedPathMeasure
+{
+public:
+    ScriptedPathMeasure(PathMeasure measure) : m_measure(std::move(measure)) {}
+
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 27;
+    static constexpr const char* luaName = "PathMeasure";
+    static constexpr bool hasMetatable = true;
+
+    PathMeasure* measure() { return &m_measure; }
+
+private:
+    PathMeasure m_measure;
+};
+
+class ScriptedContext
+{
+public:
+    ScriptedContext(ScriptedObject*);
+    ScriptedObject* scriptedObject() { return m_scriptedObject; }
+    static constexpr uint8_t luaTag = LUA_T_COUNT + 28;
+    static constexpr const char* luaName = "Context";
+    static constexpr bool hasMetatable = true;
+
+private:
+    ScriptedObject* m_scriptedObject = nullptr;
 };
 
 static void interruptCPP(lua_State* L, int gc);

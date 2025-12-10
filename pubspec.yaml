@@ -1,5 +1,5 @@
 name: rive_native
-version: 0.0.16
+version: 0.1.0
 homepage: https://rive.app
 description: Rive's native runtime and renderer for Flutter.
 topics:

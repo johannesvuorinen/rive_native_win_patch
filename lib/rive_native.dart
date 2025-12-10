@@ -12,6 +12,8 @@ import 'src/rive_native_ffi.dart'
 export 'src/rive.dart';
 export 'src/rive_renderer.dart';
 export 'package:rive_native/math.dart';
+export 'src/rive_artboard_layout.dart';
+export 'src/rive_ticker_aware_painter.dart';
 export 'src/rive_widget.dart';
 export 'src/rive_hit_test.dart';
 export 'src/defaults.dart';
@@ -25,6 +27,16 @@ export 'rive_text.dart' show Font;
 /// [PainterPointerEventMixin].
 abstract base class RivePainter extends ChangeNotifier {
   RivePainter();
+
+  /// Whether the animation ticker is currently active.
+  ///
+  /// This method can be overridden by subclasses to provide custom ticker state
+  /// logic. By default, returns false as the base implementation doesn't have
+  /// direct access to the ticker.
+  ///
+  /// Subclasses that need ticker state should override this method and maintain
+  /// a reference to their associated render box or ticker.
+  bool get isTickerActive => false;
 
   /// Creates a new [SingleAnimationPainter] instance.
   ///

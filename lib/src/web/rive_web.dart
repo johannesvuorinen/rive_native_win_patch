@@ -36,12 +36,12 @@ List<ViewModelProperty> _parseViewModelProperties(js.JSObject result) {
 class _WebAssetLoaderCallable {
   final AssetLoaderCallback assetLoader;
   final Factory riveFactory;
-  late bool Function(int, int?, int) webLoader;
+  late bool Function(int, int, int) webLoader;
 
   _WebAssetLoaderCallable(this.assetLoader, this.riveFactory) {
-    webLoader = (int assetPointer, int? bytesPointer, int size) {
+    webLoader = (int assetPointer, int bytesPointer, int size) {
       final dartBytes =
-          bytesPointer != null ? _wasmHeapUint8(bytesPointer, size) : null;
+          bytesPointer != 0 ? _wasmHeapUint8(bytesPointer, size) : null;
       final assetType = (RiveWasm.riveFileAssetCoreType
               .callAsFunction(null, assetPointer.toJS) as js.JSNumber)
           .toDartInt;
@@ -146,11 +146,16 @@ Factory getFlutterFactory() => WebFlutterFactory.instance;
 int toPointer(js.JSAny? any) => (any as js.JSNumber).toDartInt;
 
 sealed class WebFileAsset implements FileAssetInterface {
-  final int _pointer;
+  static final _finalizer = Finalizer((js.JSAny pointer) =>
+      RiveWasm.deleteFileAsset.callAsFunction(null, pointer));
+
+  int _pointer;
   final Factory _riveFactory;
   int get pointer => _pointer;
 
-  WebFileAsset(this._pointer, this._riveFactory);
+  WebFileAsset(this._pointer, this._riveFactory) {
+    _finalizer.attach(this, _pointer.toJS, detach: this);
+  }
 
   @override
   int get assetId =>
@@ -185,6 +190,16 @@ sealed class WebFileAsset implements FileAssetInterface {
 
   @override
   Factory get riveFactory => _riveFactory;
+
+  @override
+  void dispose() {
+    if (pointer == 0) {
+      return;
+    }
+    _finalizer.detach(this);
+    RiveWasm.deleteFileAsset.callAsFunction(null, pointer.toJS);
+    _pointer = 0;
+  }
 }
 
 class WebImageAsset extends WebFileAsset implements ImageAsset {
@@ -216,7 +231,9 @@ class WebImageAsset extends WebFileAsset implements ImageAsset {
     if (decodedImage == null) {
       return false;
     }
-    return renderImage(decodedImage);
+    final result = renderImage(decodedImage);
+    decodedImage.dispose();
+    return result;
   }
 }
 
@@ -237,7 +254,9 @@ class WebFontAsset extends WebFileAsset implements FontAsset {
     if (decodedFont == null) {
       return false;
     }
-    return font(decodedFont);
+    final result = font(decodedFont);
+    decodedFont.dispose();
+    return result;
   }
 }
 
@@ -258,7 +277,9 @@ class WebAudioAsset extends WebFileAsset implements AudioAsset {
     if (decodedAudio == null) {
       return false;
     }
-    return audio(decodedAudio);
+    final result = audio(decodedAudio);
+    decodedAudio.dispose();
+    return result;
   }
 }
 
@@ -1597,6 +1618,39 @@ class WebRiveArtboard extends Artboard {
       viewModelInstance.pointer.toJS,
     );
   }
+
+  @override
+  List<TextValueRunRuntime> get textRuns {
+    final rawResult =
+        RiveWasm.artboardGetAllTextRuns.callAsFunction(null, _pointer.toJS);
+    if (rawResult == null) {
+      return [];
+    }
+    final result = rawResult as js.JSObject;
+    final count = (result.getProperty('count'.toJS) as js.JSNumber).toDartInt;
+    final arrayPtr =
+        (result.getProperty('array'.toJS) as js.JSNumber).toDartInt;
+
+    if (count == 0 || arrayPtr == 0) {
+      if (arrayPtr != 0) {
+        RiveWasm.freeTextRunsArray.callAsFunction(null, arrayPtr.toJS);
+      }
+      return [];
+    }
+
+    final textRuns = <TextValueRunRuntime>[];
+    for (int i = 0; i < count; i++) {
+      final textRunPtr = (RiveWasm.getTextRunFromArray
+              .callAsFunction(null, arrayPtr.toJS, i.toJS) as js.JSNumber)
+          .toDartInt;
+      if (textRunPtr != 0) {
+        textRuns.add(WebTextValueRun(textRunPtr));
+      }
+    }
+
+    RiveWasm.freeTextRunsArray.callAsFunction(null, arrayPtr.toJS);
+    return textRuns;
+  }
 }
 
 bool _wasmBool(js.JSAny? value) => (value as js.JSNumber).toDartInt == 1;
@@ -2319,6 +2373,73 @@ class WebComponent extends Component {
         worldTransform[4].toJS,
         worldTransform[5].toJS,
       );
+}
+
+class WebTextValueRun extends TextValueRunRuntime {
+  static final _finalizer = Finalizer(
+    (js.JSAny pointer) =>
+        RiveWasm.deleteTextValueRun.callAsFunction(null, pointer),
+  );
+
+  int get pointer => _pointer;
+  int _pointer;
+
+  WebTextValueRun(this._pointer) {
+    _finalizer.attach(this, _pointer.toJS, detach: this);
+  }
+
+  @override
+  String get name {
+    final stringPointer = (RiveWasm.textValueRunName
+            .callAsFunction(null, _pointer.toJS) as js.JSNumber)
+        .toDartInt;
+    if (stringPointer == 0) {
+      return '';
+    }
+    return RiveWasm.toDartString(stringPointer);
+  }
+
+  @override
+  String get text {
+    final stringPointer = (RiveWasm.textValueRunText
+            .callAsFunction(null, _pointer.toJS) as js.JSNumber)
+        .toDartInt;
+    if (stringPointer == 0) {
+      return '';
+    }
+    return RiveWasm.toDartString(stringPointer);
+  }
+
+  @override
+  String get path {
+    final stringPointer = (RiveWasm.textValueRunPath
+            .callAsFunction(null, _pointer.toJS) as js.JSNumber)
+        .toDartInt;
+    if (stringPointer == 0) {
+      return '';
+    }
+    return RiveWasm.toDartString(stringPointer);
+  }
+
+  @override
+  set text(String value) => RiveWasm.toNativeString(
+        value,
+        (valuePointer) {
+          RiveWasm.textValueRunSetText
+              .callAsFunction(null, _pointer.toJS, valuePointer);
+        },
+      );
+
+  @override
+  void dispose() {
+    if (_pointer == 0) {
+      return;
+    }
+    final pointer = _pointer;
+    _pointer = 0;
+    _finalizer.detach(this);
+    RiveWasm.deleteTextValueRun.callAsFunction(null, pointer.toJS);
+  }
 }
 
 class WebAnimation extends Animation {

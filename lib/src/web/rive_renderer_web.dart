@@ -948,7 +948,7 @@ class WebTrimPath extends TrimPathEffect {
   }
 
   @override
-  RenderPath effectPath(covariant WebRenderPath path) =>
+  RenderPath effectPath(covariant WebRenderPath path, int shapePaintType) =>
       WebRenderPath.fromPointer(
         path.riveFactory,
         RiveWasm.trimPathEffectPath.callAsFunction(
@@ -956,6 +956,7 @@ class WebTrimPath extends TrimPathEffect {
           path.riveFactory.pointer,
           _pointer,
           path.pointer,
+          shapePaintType.toJS,
         ),
       );
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
+import 'dart:ui' show Color;
 
 import 'package:meta/meta.dart';
 import 'package:rive_native/src/utilities/utilities.dart';
@@ -26,9 +27,15 @@ enum HighlightScope {
   function
 }
 
+class HighlightScopeStyle {
+  final Color color;
+  final double? weight;
+
+  const HighlightScopeStyle(this.color, {this.weight});
+}
+
 class FormatOp {
   final ScriptPosition position;
-  Object? userdata;
   FormatOp({required this.position});
 }
 
@@ -104,7 +111,7 @@ class ScriptPosition implements Comparable<ScriptPosition> {
       other is ScriptPosition && other.line == line && other.column == column;
 
   @override
-  String toString() => 'Ln $line, Col $column';
+  String toString() => '${line + 1}:${column + 1}';
 
   @override
   int compareTo(ScriptPosition other) {
@@ -301,6 +308,76 @@ class AutocompleteEntry {
   }
 }
 
+class DefinitionResult {
+  final bool found;
+  final String moduleName;
+  final ScriptRange definitionRange;
+  final ScriptRange tokenRange;
+  final String preview;
+  final String documentationSymbol;
+  final String documentation;
+
+  DefinitionResult({
+    required this.found,
+    required this.moduleName,
+    required this.definitionRange,
+    required this.tokenRange,
+    required this.preview,
+    required this.documentationSymbol,
+    required this.documentation,
+  });
+
+  static DefinitionResult read(BinaryReader reader) {
+    final found = reader.readUint8() != 0;
+    if (!found) {
+      return DefinitionResult(
+        found: false,
+        moduleName: '',
+        definitionRange: const ScriptRange(
+          begin: ScriptPosition(line: 0, column: 0),
+          end: ScriptPosition(line: 0, column: 0),
+        ),
+        tokenRange: const ScriptRange(
+          begin: ScriptPosition(line: 0, column: 0),
+          end: ScriptPosition(line: 0, column: 0),
+        ),
+        preview: '',
+        documentationSymbol: '',
+        documentation: '',
+      );
+    }
+
+    final moduleName = reader.readString();
+    final beginLine = reader.readVarUint();
+    final beginColumn = reader.readVarUint();
+    final endLine = reader.readVarUint();
+    final endColumn = reader.readVarUint();
+    final tokenBeginLine = reader.readVarUint();
+    final tokenBeginColumn = reader.readVarUint();
+    final tokenEndLine = reader.readVarUint();
+    final tokenEndColumn = reader.readVarUint();
+    final preview = reader.readString();
+    final documentationSymbol = reader.readString();
+    final documentation = reader.readString();
+
+    return DefinitionResult(
+      found: true,
+      moduleName: moduleName,
+      definitionRange: ScriptRange(
+        begin: ScriptPosition(line: beginLine, column: beginColumn),
+        end: ScriptPosition(line: endLine, column: endColumn),
+      ),
+      tokenRange: ScriptRange(
+        begin: ScriptPosition(line: tokenBeginLine, column: tokenBeginColumn),
+        end: ScriptPosition(line: tokenEndLine, column: tokenEndColumn),
+      ),
+      preview: preview,
+      documentationSymbol: documentationSymbol,
+      documentation: documentation,
+    );
+  }
+}
+
 enum HighlightResult { unknown, computed }
 
 enum InsertionCompletion { none, end, doEnd, until, thenEnd }
@@ -427,15 +504,96 @@ abstract class ScriptingWorkspaceResponseResult {
   BinaryReader? get reader;
 }
 
-class CompiledDependency {
+class CompiledModule {
   final String name;
   final Uint8List bytecode;
-  CompiledDependency({required this.bytecode, required this.name});
+  CompiledModule({required this.bytecode, required this.name});
+}
+
+class CompileAndSignResult {
+  final List<CompiledModule> modules;
+  final Uint8List signature;
+
+  CompileAndSignResult({required this.modules, required this.signature});
+
+  static CompileAndSignResult? read(BinaryReader reader) {
+    final moduleCount = reader.readVarUint();
+
+    final modules = <CompiledModule>[];
+    for (int i = 0; i < moduleCount; i++) {
+      final name = reader.readString();
+      final length = reader.readVarUint();
+      final bytecode = reader.read(length);
+      modules.add(CompiledModule(bytecode: bytecode, name: name));
+    }
+
+    final signatureLength = reader.readVarUint();
+    Uint8List signature = reader.read(signatureLength);
+    return CompileAndSignResult(modules: modules, signature: signature);
+  }
+}
+
+class FindInFilesMatch {
+  final int line;
+  final String beforeMatch;
+  final String matchText;
+  final String afterMatch;
+
+  FindInFilesMatch({
+    required this.line,
+    required this.beforeMatch,
+    required this.matchText,
+    required this.afterMatch,
+  });
+}
+
+class ScriptFindResults {
+  final String scriptId;
+  final List<FindInFilesMatch> matches;
+
+  ScriptFindResults({
+    required this.scriptId,
+    required this.matches,
+  });
+}
+
+class FindInFilesResult {
+  final List<ScriptFindResults> results;
+
+  FindInFilesResult({required this.results});
+
+  static FindInFilesResult? read(BinaryReader reader) {
+    final scriptCount = reader.readVarUint();
+    final results = <ScriptFindResults>[];
+
+    for (int i = 0; i < scriptCount; i++) {
+      final scriptId = reader.readString();
+      final matchCount = reader.readVarUint();
+      final matches = <FindInFilesMatch>[];
+
+      for (int j = 0; j < matchCount; j++) {
+        final line = reader.readVarUint();
+        final beforeMatch = reader.readString();
+        final matchText = reader.readString();
+        final afterMatch = reader.readString();
+        matches.add(FindInFilesMatch(
+          line: line,
+          beforeMatch: beforeMatch,
+          matchText: matchText,
+          afterMatch: afterMatch,
+        ));
+      }
+
+      results.add(ScriptFindResults(scriptId: scriptId, matches: matches));
+    }
+
+    return FindInFilesResult(results: results);
+  }
 }
 
 class CompileResult {
   final Uint8List bytecode;
-  final Iterable<CompiledDependency> dependencies;
+  final Iterable<CompiledModule> dependencies;
   final Iterable<String> dependents;
 
   CompileResult(
@@ -452,13 +610,13 @@ class CompileResult {
     if (reader.isEOF) {
       return CompileResult(bytecode: bytecode);
     }
-    final dependencies = <CompiledDependency>[];
+    final dependencies = <CompiledModule>[];
     final count = reader.readVarUint();
     for (int i = 0; i < count; i++) {
       final name = reader.readString();
       final length = reader.readVarUint();
       final bytecode = reader.read(length);
-      dependencies.add(CompiledDependency(bytecode: bytecode, name: name));
+      dependencies.add(CompiledModule(bytecode: bytecode, name: name));
     }
     final dependents = <String>[];
     while (!reader.isEOF) {
@@ -470,6 +628,28 @@ class CompileResult {
       dependents: dependents,
     );
   }
+}
+
+enum OptimizationLevel {
+  /// no optimization
+  none,
+
+  /// baseline optimization level that doesn't prevent debuggability
+  medium,
+
+  /// includes optimizations that harm debuggability such as inlining
+  max
+}
+
+enum DebugLevel {
+  /// no debugging support
+  none,
+
+  /// line info & function names only; sufficient for backtraces
+  medium,
+
+  /// full debug info with local & upvalue names; necessary for debugger
+  max
 }
 
 /// A workspace represents a collection of files that are likely related
@@ -493,8 +673,33 @@ abstract class ScriptingWorkspace {
   Future<FormatResult> format(String scriptName);
 
   /// Retrieves the bytecode for module named [scriptName].
-  Future<CompileResult?> compile(String scriptName,
-      {bool failOnErrors = false, bool compileDependencies = false});
+  Future<CompileResult?> compile(
+    String scriptName, {
+    bool failOnErrors = false,
+    bool compileDependencies = false,
+    OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+    DebugLevel debugLevel = DebugLevel.medium,
+  });
+
+  /// Retrieves the bytecode for listed modules and signature.
+  Future<CompileAndSignResult?> compileAndSign(
+    Iterable<String> scriptNames,
+    Uint8List privateKey, {
+    bool failOnErrors = false,
+    OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+    DebugLevel debugLevel = DebugLevel.medium,
+  });
+
+  /// Searches for [query] in files. If [inclusionSet] is provided, only those
+  /// files are searched, otherwise all non-built-in files are searched.
+  Future<FindInFilesResult> findInFiles(
+    Iterable<String>? inclusionSet,
+    String query, {
+    bool caseSensitive = false,
+    bool matchWholeWord = false,
+    bool regularExpression = false,
+    bool trim = true,
+  });
 
   /// Retrieves the implemented type for module named [scriptName].
   Future<ImplementedType?> implementedType(String scriptName);
@@ -511,6 +716,10 @@ abstract class ScriptingWorkspace {
   /// Get possible autocompletion results at [position] in script with name
   /// [scriptName].
   Future<AutocompleteResult> autocomplete(
+      String scriptName, ScriptPosition position);
+
+  /// Get definition information at [position] in script with name [scriptName].
+  Future<DefinitionResult> getDefinition(
       String scriptName, ScriptPosition position);
 
   /// Dispose of the workspace, any further calls will not work.
@@ -559,10 +768,16 @@ abstract class ScriptingWorkspace {
       _completeFormat(completer, response);
     } else if (completer is Completer<AutocompleteResult>) {
       _completeAutocomplete(completer, response);
+    } else if (completer is Completer<DefinitionResult>) {
+      _completeDefinition(completer, response);
     } else if (completer is Completer<ImplementedType?>) {
       _completeImplementedType(completer, response);
     } else if (completer is Completer<CompileResult?>) {
       _completeCompile(completer, response);
+    } else if (completer is Completer<CompileAndSignResult?>) {
+      _completeCompileAndSign(completer, response);
+    } else if (completer is Completer<FindInFilesResult>) {
+      _completeFindInFiles(completer, response);
     }
   }
 
@@ -618,6 +833,18 @@ abstract class ScriptingWorkspace {
     completer.complete(AutocompleteResult.read(reader));
   }
 
+  void _completeDefinition(
+    Completer<DefinitionResult> completer,
+    ScriptingWorkspaceResponseResult result,
+  ) {
+    final reader = result.reader;
+    if (reader == null) {
+      return;
+    }
+
+    completer.complete(DefinitionResult.read(reader));
+  }
+
   void _completeHighlight(
     Completer<HighlightResult> completer,
     ScriptingWorkspaceResponseResult result,
@@ -657,6 +884,28 @@ abstract class ScriptingWorkspace {
       return;
     }
     completer.complete(CompileResult.read(reader));
+  }
+
+  void _completeCompileAndSign(
+    Completer<CompileAndSignResult?> completer,
+    ScriptingWorkspaceResponseResult result,
+  ) {
+    final reader = result.reader;
+    if (reader == null) {
+      return;
+    }
+    completer.complete(CompileAndSignResult.read(reader));
+  }
+
+  void _completeFindInFiles(
+    Completer<FindInFilesResult> completer,
+    ScriptingWorkspaceResponseResult result,
+  ) {
+    final reader = result.reader;
+    if (reader == null) {
+      return;
+    }
+    completer.complete(FindInFilesResult.read(reader));
   }
 
   String get builtinDefinitions;

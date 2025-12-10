@@ -208,7 +208,10 @@
 #include "rive/script_input_string.hpp"
 #include "rive/script_input_trigger.hpp"
 #include "rive/script_input_viewmodel_property.hpp"
+#include "rive/scripted/scripted_data_converter.hpp"
 #include "rive/scripted/scripted_drawable.hpp"
+#include "rive/scripted/scripted_layout.hpp"
+#include "rive/scripted/scripted_path_effect.hpp"
 #include "rive/shapes/clipping_shape.hpp"
 #include "rive/shapes/contour_mesh_vertex.hpp"
 #include "rive/shapes/cubic_asymmetric_vertex.hpp"
@@ -430,6 +433,12 @@ public:
                 return new Solo();
             case ScriptedDrawableBase::typeKey:
                 return new ScriptedDrawable();
+            case ScriptedDataConverterBase::typeKey:
+                return new ScriptedDataConverter();
+            case ScriptedLayoutBase::typeKey:
+                return new ScriptedLayout();
+            case ScriptedPathEffectBase::typeKey:
+                return new ScriptedPathEffect();
             case ScriptInputNumberBase::typeKey:
                 return new ScriptInputNumber();
             case NestedArtboardLayoutBase::typeKey:
@@ -927,6 +936,12 @@ public:
                 break;
             case ScriptedDrawableBase::scriptAssetIdPropertyKey:
                 object->as<ScriptedDrawableBase>()->scriptAssetId(value);
+                break;
+            case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
+                object->as<ScriptedDataConverterBase>()->scriptAssetId(value);
+                break;
+            case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
+                object->as<ScriptedPathEffectBase>()->scriptAssetId(value);
                 break;
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 object->as<NestedArtboardLayoutBase>()->instanceWidthUnitsValue(
@@ -1528,6 +1543,9 @@ public:
             case DataEnumValueBase::valuePropertyKey:
                 object->as<DataEnumValueBase>()->value(value);
                 break;
+            case DataConverterBase::namePropertyKey:
+                object->as<DataConverterBase>()->name(value);
+                break;
             case AnimationBase::namePropertyKey:
                 object->as<AnimationBase>()->name(value);
                 break;
@@ -1545,9 +1563,6 @@ public:
                 break;
             case CustomPropertyStringBase::propertyValuePropertyKey:
                 object->as<CustomPropertyStringBase>()->propertyValue(value);
-                break;
-            case DataConverterBase::namePropertyKey:
-                object->as<DataConverterBase>()->name(value);
                 break;
             case DataConverterStringPadBase::textPropertyKey:
                 object->as<DataConverterStringPadBase>()->text(value);
@@ -1865,6 +1880,12 @@ public:
                 break;
             case NodeBase::computedHeightPropertyKey:
                 object->as<NodeBase>()->computedHeight(value);
+                break;
+            case NestedArtboardBase::speedPropertyKey:
+                object->as<NestedArtboardBase>()->speed(value);
+                break;
+            case NestedArtboardBase::quantizePropertyKey:
+                object->as<NestedArtboardBase>()->quantize(value);
                 break;
             case NestedArtboardLayoutBase::instanceWidthPropertyKey:
                 object->as<NestedArtboardLayoutBase>()->instanceWidth(value);
@@ -2511,6 +2532,10 @@ public:
                 return object->as<SoloBase>()->activeComponentId();
             case ScriptedDrawableBase::scriptAssetIdPropertyKey:
                 return object->as<ScriptedDrawableBase>()->scriptAssetId();
+            case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
+                return object->as<ScriptedDataConverterBase>()->scriptAssetId();
+            case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
+                return object->as<ScriptedPathEffectBase>()->scriptAssetId();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 return object->as<NestedArtboardLayoutBase>()
                     ->instanceWidthUnitsValue();
@@ -2943,6 +2968,8 @@ public:
                 return object->as<DataEnumValueBase>()->key();
             case DataEnumValueBase::valuePropertyKey:
                 return object->as<DataEnumValueBase>()->value();
+            case DataConverterBase::namePropertyKey:
+                return object->as<DataConverterBase>()->name();
             case AnimationBase::namePropertyKey:
                 return object->as<AnimationBase>()->name();
             case StateMachineComponentBase::namePropertyKey:
@@ -2956,8 +2983,6 @@ public:
                 return object->as<OpenUrlEventBase>()->url();
             case CustomPropertyStringBase::propertyValuePropertyKey:
                 return object->as<CustomPropertyStringBase>()->propertyValue();
-            case DataConverterBase::namePropertyKey:
-                return object->as<DataConverterBase>()->name();
             case DataConverterStringPadBase::textPropertyKey:
                 return object->as<DataConverterStringPadBase>()->text();
             case DataConverterToStringBase::colorFormatPropertyKey:
@@ -3193,6 +3218,10 @@ public:
                 return object->as<NodeBase>()->computedWidth();
             case NodeBase::computedHeightPropertyKey:
                 return object->as<NodeBase>()->computedHeight();
+            case NestedArtboardBase::speedPropertyKey:
+                return object->as<NestedArtboardBase>()->speed();
+            case NestedArtboardBase::quantizePropertyKey:
+                return object->as<NestedArtboardBase>()->quantize();
             case NestedArtboardLayoutBase::instanceWidthPropertyKey:
                 return object->as<NestedArtboardLayoutBase>()->instanceWidth();
             case NestedArtboardLayoutBase::instanceHeightPropertyKey:
@@ -3598,6 +3627,8 @@ public:
             case NestedAnimationBase::animationIdPropertyKey:
             case SoloBase::activeComponentIdPropertyKey:
             case ScriptedDrawableBase::scriptAssetIdPropertyKey:
+            case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
+            case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
             case NestedArtboardLayoutBase::instanceHeightUnitsValuePropertyKey:
             case NestedArtboardLayoutBase::instanceWidthScaleTypePropertyKey:
@@ -3785,13 +3816,13 @@ public:
             case ComponentBase::namePropertyKey:
             case DataEnumValueBase::keyPropertyKey:
             case DataEnumValueBase::valuePropertyKey:
+            case DataConverterBase::namePropertyKey:
             case AnimationBase::namePropertyKey:
             case StateMachineComponentBase::namePropertyKey:
             case KeyFrameStringBase::valuePropertyKey:
             case TransitionValueStringComparatorBase::valuePropertyKey:
             case OpenUrlEventBase::urlPropertyKey:
             case CustomPropertyStringBase::propertyValuePropertyKey:
-            case DataConverterBase::namePropertyKey:
             case DataConverterStringPadBase::textPropertyKey:
             case DataConverterToStringBase::colorFormatPropertyKey:
             case BindablePropertyStringBase::propertyValuePropertyKey:
@@ -3893,6 +3924,8 @@ public:
             case NodeBase::computedRootYPropertyKey:
             case NodeBase::computedWidthPropertyKey:
             case NodeBase::computedHeightPropertyKey:
+            case NestedArtboardBase::speedPropertyKey:
+            case NestedArtboardBase::quantizePropertyKey:
             case NestedArtboardLayoutBase::instanceWidthPropertyKey:
             case NestedArtboardLayoutBase::instanceHeightPropertyKey:
             case AxisBase::offsetPropertyKey:
@@ -4080,6 +4113,7 @@ public:
             case DataBindContextBase::sourcePathIdsPropertyKey:
             case FileAssetBase::cdnUuidPropertyKey:
             case FileAssetContentsBase::bytesPropertyKey:
+            case FileAssetContentsBase::signaturePropertyKey:
                 return CoreBytesType::id;
             default:
                 return -1;
@@ -4176,6 +4210,10 @@ public:
                 return object->is<SoloBase>();
             case ScriptedDrawableBase::scriptAssetIdPropertyKey:
                 return object->is<ScriptedDrawableBase>();
+            case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
+                return object->is<ScriptedDataConverterBase>();
+            case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
+                return object->is<ScriptedPathEffectBase>();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
                 return object->is<NestedArtboardLayoutBase>();
             case NestedArtboardLayoutBase::instanceHeightUnitsValuePropertyKey:
@@ -4541,6 +4579,8 @@ public:
                 return object->is<DataEnumValueBase>();
             case DataEnumValueBase::valuePropertyKey:
                 return object->is<DataEnumValueBase>();
+            case DataConverterBase::namePropertyKey:
+                return object->is<DataConverterBase>();
             case AnimationBase::namePropertyKey:
                 return object->is<AnimationBase>();
             case StateMachineComponentBase::namePropertyKey:
@@ -4553,8 +4593,6 @@ public:
                 return object->is<OpenUrlEventBase>();
             case CustomPropertyStringBase::propertyValuePropertyKey:
                 return object->is<CustomPropertyStringBase>();
-            case DataConverterBase::namePropertyKey:
-                return object->is<DataConverterBase>();
             case DataConverterStringPadBase::textPropertyKey:
                 return object->is<DataConverterStringPadBase>();
             case DataConverterToStringBase::colorFormatPropertyKey:
@@ -4749,6 +4787,10 @@ public:
                 return object->is<NodeBase>();
             case NodeBase::computedHeightPropertyKey:
                 return object->is<NodeBase>();
+            case NestedArtboardBase::speedPropertyKey:
+                return object->is<NestedArtboardBase>();
+            case NestedArtboardBase::quantizePropertyKey:
+                return object->is<NestedArtboardBase>();
             case NestedArtboardLayoutBase::instanceWidthPropertyKey:
                 return object->is<NestedArtboardLayoutBase>();
             case NestedArtboardLayoutBase::instanceHeightPropertyKey:

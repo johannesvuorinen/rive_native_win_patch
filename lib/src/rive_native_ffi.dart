@@ -188,23 +188,46 @@ class _RiveNativeFFI extends RiveNative {
 
   Future<void> initialize() async {
     if (Platform.instance.isTesting || Platform.instance.isLinux) {
+      // TODO (Gordon): latest 3.38 flutter is causing issues with Factory.rive in test environments
+      // In test mode, we can't get a real Rive factory from the platform,
+      // so we use the Flutter factory as a fallback to avoid null pointer errors.
+      // This allows tests to run without requiring a full render context.
+      // if (Platform.instance.isTesting) {
+      //   final flutterFactory = rive.Factory.flutter as FFIFlutterFactory;
+      //   (rive.Factory.rive as FFIRiveFactory).pointer = flutterFactory.pointer;
+      // }
       return;
     }
-    final result = await methodChannel.invokeMethod('getRenderContext', {});
+    try {
+      final result = await methodChannel.invokeMethod('getRenderContext', {});
 
-    String rendererContext = result['rendererContext'] as String;
-    if (rendererContext == 'android') {
-      // on android we grab the global riveFactory.
-      final Pointer<Void> Function() riveFactory = nativeLib
-          .lookup<NativeFunction<Pointer<Void> Function()>>(
-            'riveFactory',
-          )
-          .asFunction();
-      (rive.Factory.rive as FFIRiveFactory).pointer = riveFactory();
-    } else {
-      (rive.Factory.rive as FFIRiveFactory).pointer = Pointer<Void>.fromAddress(
-          int.parse(rendererContext.substring(rendererContext.indexOf('x') + 1),
-              radix: 16));
+      String rendererContext = result['rendererContext'] as String;
+      if (rendererContext == 'android') {
+        // on android we grab the global riveFactory.
+        final Pointer<Void> Function() riveFactory = nativeLib
+            .lookup<NativeFunction<Pointer<Void> Function()>>(
+              'riveFactory',
+            )
+            .asFunction();
+        (rive.Factory.rive as FFIRiveFactory).pointer = riveFactory();
+      } else {
+        (rive.Factory.rive as FFIRiveFactory).pointer =
+            Pointer<Void>.fromAddress(int.parse(
+                rendererContext.substring(rendererContext.indexOf('x') + 1),
+                radix: 16));
+      }
+    } catch (e) {
+      var message = '''
+Error creating Rive Native render context
+It could be because the native library is not loaded.
+
+Try running the following command to fix this issue:
+`dart run rive_native:setup --verbose --clean --platform <platform>`
+
+Error: $e
+''';
+      debugPrint(message);
+      rethrow;
     }
   }
 }
@@ -311,15 +334,9 @@ class _RiveNativeViewRenderObject extends RiveNativeRenderBox
         if (!attached) {
           return;
         }
-        // _actualTransformWidthScale = desiredTransformWidthScale;
-        // _actualTranformHeightScale = desiredTransformHeightScale;
         rivePainter?.textureChanged();
         renderTexture.textureChanged();
-        // Force the advance as sometimes advancing a state machine
-        // by 0 will return false. This results in the graphic settling
-        // prematurely when the window/widget is resized, or re enetering from
-        // a background state (Android).
-        paintTexture(0, forceShouldAdvance: true);
+
         // Texture id will have changed...
         markNeedsPaint();
 

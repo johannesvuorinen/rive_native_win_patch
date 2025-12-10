@@ -100,6 +100,27 @@ rive::Span<const uint32_t> loadNewShaderFileData()
         riveSpirvPath / "atomic_resolve_coalesced.vert.spirv",
         riveSpirvPath / "atomic_resolve_coalesced.frag.spirv",
 
+#ifndef RIVE_ANDROID
+        riveSpirvPath / "draw_clockwise_path.vert.spirv",
+        riveSpirvPath / "draw_clockwise_path.frag.spirv",
+        riveSpirvPath / "draw_clockwise_path.fixedcolor_frag.spirv",
+        riveSpirvPath / "draw_clockwise_clip.frag.spirv",
+        riveSpirvPath / "draw_clockwise_clip.fixedcolor_frag.spirv",
+        riveSpirvPath / "draw_clockwise_interior_triangles.vert.spirv",
+        riveSpirvPath / "draw_clockwise_interior_triangles.frag.spirv",
+        riveSpirvPath /
+            "draw_clockwise_interior_triangles.fixedcolor_frag.spirv",
+        riveSpirvPath / "draw_clockwise_interior_triangles_clip.frag.spirv",
+        riveSpirvPath /
+            "draw_clockwise_interior_triangles_clip.fixedcolor_frag.spirv",
+        riveSpirvPath / "draw_clockwise_atlas_blit.vert.spirv",
+        riveSpirvPath / "draw_clockwise_atlas_blit.frag.spirv",
+        riveSpirvPath / "draw_clockwise_atlas_blit.fixedcolor_frag.spirv",
+        riveSpirvPath / "draw_clockwise_image_mesh.vert.spirv",
+        riveSpirvPath / "draw_clockwise_image_mesh.frag.spirv",
+        riveSpirvPath / "draw_clockwise_image_mesh.fixedcolor_frag.spirv",
+#endif
+
         riveSpirvPath / "draw_clockwise_atomic_path.vert.spirv",
         riveSpirvPath / "draw_clockwise_atomic_path.frag.spirv",
         riveSpirvPath / "draw_clockwise_atomic_interior_triangles.vert.spirv",
@@ -124,8 +145,9 @@ rive::Span<const uint32_t> loadNewShaderFileData()
         riveSpirvPath / "draw_msaa_image_mesh.noclipdistance_vert.spirv",
         riveSpirvPath / "draw_msaa_image_mesh.frag.spirv",
         riveSpirvPath / "draw_msaa_image_mesh.fixedcolor_frag.spirv",
-        riveSpirvPath / "copy_attachment_to_attachment.vert.spirv",
+        riveSpirvPath / "draw_fullscreen_quad.vert.spirv",
         riveSpirvPath / "copy_attachment_to_attachment.frag.spirv",
+        riveSpirvPath / "draw_msaa_resolve.frag.spirv",
     };
     constexpr size_t numFiles = std::size(spirvFileNames);
 

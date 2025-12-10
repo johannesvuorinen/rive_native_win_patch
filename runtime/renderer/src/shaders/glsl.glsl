@@ -81,14 +81,14 @@
 #endif
 
 // clang-format off
-#if defined(@RENDER_MODE_MSAA) && defined(@ENABLE_CLIP_RECT) && defined(GL_ES)
-// clang-format on
+#if defined(@RENDER_MODE_MSAA) && defined(@ENABLE_CLIP_RECT) && defined(GL_ES) && !defined(@DISABLE_CLIP_DISTANCE_FOR_UBERSHADERS)
 #ifdef GL_EXT_clip_cull_distance
 #extension GL_EXT_clip_cull_distance : require
 #elif defined(GL_ANGLE_clip_cull_distance)
 #extension GL_ANGLE_clip_cull_distance : require
 #endif
-#endif // RENDER_MODE_MSAA && ENABLE_CLIP_RECT
+#endif // RENDER_MODE_MSAA && ENABLE_CLIP_RECT && GL_ES && !DISABLE_CLIP_DISTANCE_FOR_UBERSHADERS
+// clang-format on
 
 #if @GLSL_VERSION >= 310
 #define UNIFORM_BLOCK_BEGIN(IDX, NAME)                                         \
@@ -169,10 +169,6 @@
 #define TEXTURE_R32UI(SET, IDX, NAME)                                          \
     layout(binding = IDX) uniform highp utexture2D NAME
 #if defined(@FRAGMENT) && defined(@RENDER_MODE_MSAA)
-#define DST_COLOR_TEXTURE(NAME)                                                \
-    layout(input_attachment_index = 0,                                         \
-           binding = COLOR_PLANE_IDX,                                          \
-           set = PLS_TEXTURE_BINDINGS_SET) uniform lowp subpassInputMS NAME
 #endif // @FRAGMENT && @RENDER_MODE_MSAA
 #elif @GLSL_VERSION >= 310
 #define TEXTURE_RGBA32UI(SET, IDX, NAME)                                       \
@@ -187,8 +183,6 @@
     layout(binding = IDX) uniform highp isampler2D NAME
 #define TEXTURE_R32UI(SET, IDX, NAME)                                          \
     layout(binding = IDX) uniform highp usampler2D NAME
-#define DST_COLOR_TEXTURE(NAME)                                                \
-    TEXTURE_RGBA8(PER_FLUSH_BINDINGS_SET, DST_COLOR_TEXTURE_IDX, NAME)
 #else
 #define TEXTURE_RGBA32UI(SET, IDX, NAME) uniform highp usampler2D NAME
 #define TEXTURE_RGBA32F(SET, IDX, NAME) uniform highp sampler2D NAME
@@ -196,8 +190,6 @@
 #define TEXTURE_R16F(SET, IDX, NAME) uniform mediump sampler2D NAME
 #define TEXTURE_R32I(SET, IDX, NAME) uniform highp isampler2D NAME
 #define TEXTURE_R32UI(SET, IDX, NAME) uniform highp usampler2D NAME
-#define DST_COLOR_TEXTURE(NAME)                                                \
-    TEXTURE_RGBA8(PER_FLUSH_BINDINGS_SET, DST_COLOR_TEXTURE_IDX, NAME)
 #endif
 
 #ifdef @TARGET_VULKAN
@@ -219,11 +211,6 @@
     textureGrad(sampler2D(NAME, SAMPLER_NAME), COORD, DDX, DDY)
 #if defined(@FRAGMENT) && defined(@RENDER_MODE_MSAA)
 #extension GL_OES_sample_variables : require
-#define DST_COLOR_FETCH(NAME)                                                  \
-    dst_color_fetch(mat4(subpassLoad(NAME, 0),                                 \
-                         subpassLoad(NAME, 1),                                 \
-                         subpassLoad(NAME, 2),                                 \
-                         subpassLoad(NAME, 3)))
 #endif // @FRAGMENT && @RENDER_MODE_MSAA
 #else  // @TARGET_VULKAN -> !@TARGET_VULKAN
 // SAMPLER_LINEAR and SAMPLER_MIPMAP are no-ops because in GL, sampling
@@ -238,7 +225,6 @@
     texture(NAME, COORD, LODBIAS)
 #define TEXTURE_SAMPLE_GRAD(NAME, SAMPLER_NAME, COORD, DDX, DDY)               \
     textureGrad(NAME, COORD, DDX, DDY)
-#define DST_COLOR_FETCH(NAME) texelFetch(NAME, ivec2(floor(_fragCoord.xy)), 0)
 #endif // !@TARGET_VULKAN
 
 #define TEXTURE_SAMPLE_DYNAMIC(TEXTURE, SAMPLER_NAME, COORD)                   \
@@ -364,7 +350,13 @@
 
 #ifdef @PLS_IMPL_EXT_NATIVE
 
+#ifdef @FIXED_FUNCTION_COLOR_OUTPUT
+// fixedFunctionColorOutput renders directly to the framebuffer, which requires
+// EXT_shader_pixel_local_storage2.
+#extension GL_EXT_shader_pixel_local_storage2 : require
+#else
 #extension GL_EXT_shader_pixel_local_storage : require
+#endif
 
 #define PLS_BLOCK_BEGIN                                                        \
     __pixel_localEXT PLS                                                       \
@@ -386,6 +378,17 @@
 #define PLS_INTERLOCK_BEGIN
 #define PLS_INTERLOCK_END
 
+#ifdef @FIXED_FUNCTION_COLOR_OUTPUT
+// EXT_shader_pixel_local_storage2 requires explicit output format qualifiers
+// on fragment shader outputs.
+#define PLS_FRAG_COLOR_MAIN(NAME)                                              \
+    layout(location = 0, rgba8) out half4 _fragColor;                          \
+    PLS_MAIN(NAME)
+
+#define PLS_FRAG_COLOR_MAIN_WITH_IMAGE_UNIFORMS(NAME)                          \
+    layout(location = 0, rgba8) out half4 _fragColor;                          \
+    PLS_MAIN(NAME)
+#endif
 #endif
 
 #ifdef @PLS_IMPL_STORAGE_TEXTURE
@@ -519,6 +522,9 @@
 #define VERTEX_CONTEXT_DECL
 #define VERTEX_CONTEXT_UNPACK
 
+#define CLIP_CONTEXT_FORWARD
+#define CLIP_CONTEXT_UNPACK
+
 #define VERTEX_MAIN(NAME, Attrs, attrs, _vertexID, _instanceID)                \
     void main()                                                                \
     {                                                                          \
@@ -577,6 +583,19 @@
 
 #define EMIT_PLS }
 
+// Storage textures are expensive to update. It's faster to conditionally update
+// them when possible.
+#define PLS_STORE4F_OPTIONAL_IF(CONDITION, PLANE, VALUE)                       \
+    if (!(CONDITION))                                                          \
+    {                                                                          \
+        PLS_STORE4F(PLANE, VALUE);                                             \
+    }
+#define PLS_STOREUI_OPTIONAL_IF(CONDITION, PLANE, VALUE)                       \
+    if (!(CONDITION))                                                          \
+    {                                                                          \
+        PLS_STOREUI(PLANE, VALUE);                                             \
+    }
+
 #else // !USING_PLS_STORAGE_TEXTURES
 
 #define PLS_CONTEXT_DECL
@@ -585,19 +604,47 @@
 #define PLS_MAIN(NAME) void main()
 #define EMIT_PLS
 
+// Cheap forms of PLS do better to update unconditionally, even if it might be a
+// no-op. (Especially since we otherwise would have had to preserve anyway.)
+#define PLS_STORE4F_OPTIONAL_IF(CONDITION, PLANE, VALUE)                       \
+    PLS_STORE4F(PLANE, VALUE);
+#define PLS_STOREUI_OPTIONAL_IF(CONDITION, PLANE, VALUE)                       \
+    PLS_STOREUI(PLANE, VALUE);
+
 #endif // !USING_PLS_STORAGE_TEXTURES
 
 #define PLS_MAIN_WITH_IMAGE_UNIFORMS(NAME) PLS_MAIN(NAME)
 
+#ifndef PLS_FRAG_COLOR_MAIN
 #define PLS_FRAG_COLOR_MAIN(NAME)                                              \
     layout(location = 0) out half4 _fragColor;                                 \
     PLS_MAIN(NAME)
+#endif
 
+#ifndef PLS_FRAG_COLOR_MAIN_WITH_IMAGE_UNIFORMS
 #define PLS_FRAG_COLOR_MAIN_WITH_IMAGE_UNIFORMS(NAME)                          \
     layout(location = 0) out half4 _fragColor;                                 \
     PLS_MAIN(NAME)
+#endif
 
 #define EMIT_PLS_AND_FRAG_COLOR EMIT_PLS
+
+#if defined(@TARGET_VULKAN) && !defined(@INPUT_ATTACHMENT_NONE)
+#define DST_COLOR_TEXTURE(NAME)                                                \
+    layout(input_attachment_index = 0,                                         \
+           binding = COLOR_PLANE_IDX,                                          \
+           set = PLS_TEXTURE_BINDINGS_SET) uniform lowp subpassInputMS NAME
+#define DST_COLOR_FETCH(NAME)                                                  \
+    dst_color_fetch(mat4(subpassLoad(NAME, 0),                                 \
+                         subpassLoad(NAME, 1),                                 \
+                         subpassLoad(NAME, 2),                                 \
+                         subpassLoad(NAME, 3)),                                \
+                    gl_SampleMaskIn[0])
+#else
+#define DST_COLOR_TEXTURE(NAME)                                                \
+    TEXTURE_RGBA8(PER_FLUSH_BINDINGS_SET, DST_COLOR_TEXTURE_IDX, NAME)
+#define DST_COLOR_FETCH(NAME) texelFetch(NAME, ivec2(floor(_fragCoord.xy)), 0)
+#endif
 
 #define MUL(A, B) ((A) * (B))
 
@@ -612,33 +659,3 @@ INLINE half4 unpackUnorm4x8(uint u)
     return float4(vals) * (1. / 255.);
 }
 #endif
-
-// The Qualcomm compiler can't handle line breaks in #ifs.
-// clang-format off
-#if defined(@TARGET_VULKAN) && defined(@FRAGMENT) && defined(@RENDER_MODE_MSAA) && !defined(@FIXED_FUNCTION_COLOR_OUTPUT)
-// clang-format on
-half4 dst_color_fetch(mediump mat4 dstSamples)
-{
-    if (gl_SampleMaskIn[0] == 0xf)
-    {
-        // Average together all samples for this fragment.
-        return (dstSamples[0] + dstSamples[1] + dstSamples[2] + dstSamples[3]) *
-               .25;
-    }
-    else
-    {
-        // Average together only the samples that are inside the sample mask.
-        half4 mask =
-            vec4(notEqual(gl_SampleMaskIn[0] & ivec4(1, 2, 4, 8), ivec4(0)));
-        half4 ret = dstSamples * mask;
-        // Since the sample mask can only have 4 bits, counting them is faster
-        // this way on Galaxy S24 than calling bitCount().
-        int numSamples =
-            (gl_SampleMaskIn[0] & 5) + ((gl_SampleMaskIn[0] >> 1) & 5);
-        numSamples = (numSamples & 3) + (numSamples >> 2);
-        ret *= 1. / float(numSamples);
-        return ret;
-    }
-}
-#endif // @TARGET_VULKAN && @FRAGMENT && @RENDER_MODE_MSAA &&
-       // !@FIXED_FUNCTION_COLOR_OUTPUT

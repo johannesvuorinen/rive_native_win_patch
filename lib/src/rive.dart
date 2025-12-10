@@ -12,6 +12,11 @@ import 'package:http/http.dart' as http;
 
 export 'package:rive_native/src/callback_handler.dart';
 
+const _useDataBindingDeprecationMessageTextRuns =
+    'Use Data Binding instead to dynamically update text runs';
+const _useDataBindingDeprecationMessageSMInput =
+    'Use Data Binding instead of state machine inputs for better editor and runtime control';
+
 class Rive {
   static void batchAdvance(
           Iterable<StateMachine> stateMachines, double elapsedSeconds) =>
@@ -71,6 +76,7 @@ abstract interface class FileAssetInterface {
   String get cdnUuid;
   @internal
   Factory get riveFactory;
+  void dispose();
 }
 
 sealed class FileAsset implements FileAssetInterface {
@@ -836,10 +842,21 @@ abstract class Artboard {
   void reset();
 
   /// Get a text run value with [runName] at optional [path].
+  @Deprecated(_useDataBindingDeprecationMessageTextRuns)
   String getText(String runName, {String? path});
 
   /// Set a text run value with [runName] at optional [path] to [value].
+  @Deprecated(_useDataBindingDeprecationMessageTextRuns)
   bool setText(String runName, String value, {String? path});
+
+  /// Get all text runs in the artboard - including nested artboards (components)
+  ///
+  /// {@template unsafeApiWarning}
+  /// **WARNING: This API could be unsafe to use and will be removed in a
+  /// future version.** Use with caution. Replace with [Data Binding](https://rive.app/docs/runtimes/data-binding).
+  /// {@endtemplate}
+  @Deprecated(_useDataBindingDeprecationMessageTextRuns)
+  List<TextValueRunRuntime> get textRuns;
 
   Mat2D get renderTransform;
   set renderTransform(Mat2D value);
@@ -1101,6 +1118,7 @@ abstract class StateMachine
   }
 
   /// Returns a list of all inputs in the state machine.
+  @Deprecated(_useDataBindingDeprecationMessageSMInput)
   List<Input> get inputs {
     final inputs = <Input>[];
     for (var i = 0;; i++) {
@@ -1126,6 +1144,7 @@ abstract class StateMachine
   ///
   /// Docs: https://rive.app/docs/runtimes/state-machines
   /// {@endtemplate}
+  @Deprecated(_useDataBindingDeprecationMessageSMInput)
   NumberInput? number(String name, {String? path});
 
   /// Retrieve a boolean input from the state machine with the given [name].
@@ -1140,6 +1159,7 @@ abstract class StateMachine
   /// ```
   ///
   /// {@macro smi_input_template}
+  @Deprecated(_useDataBindingDeprecationMessageSMInput)
   BooleanInput? boolean(String name, {String? path});
 
   /// Retrieve a trigger input from the state machine with the given [name].
@@ -1153,7 +1173,9 @@ abstract class StateMachine
   /// ```
   ///
   /// {@macro smi_input_template}
+  @Deprecated(_useDataBindingDeprecationMessageSMInput)
   TriggerInput? trigger(String name, {String? path});
+  @Deprecated(_useDataBindingDeprecationMessageSMInput)
   Input? inputAt(int index);
 
   CallbackHandler onDataBindChanged(Function() callback);
@@ -1476,5 +1498,27 @@ abstract class Component {
 
   void setLocalFromWorld(Mat2D worldTransform);
 
+  void dispose();
+}
+
+/// A text run value in a Rive artboard.
+abstract class TextValueRunRuntime {
+  /// The name of the text run - empty if not exported in the Rive Editor
+  String get name;
+
+  /// The text value of the text run
+  String get text;
+
+  /// Sets the text value of the text run
+  set text(String value);
+
+  /// The nested artboard path of the text run, relative to the artboard this
+  // ignore: deprecated_member_use_from_same_package
+  /// was retrieved from - see [Artboard.textRuns].
+  String get path;
+
+  /// Dispose the text run.
+  ///
+  /// After calling dispose, the text run should no longer be used.
   void dispose();
 }

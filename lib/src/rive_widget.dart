@@ -2,17 +2,16 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Animation;
 import 'package:meta/meta.dart';
-import 'package:rive_native/rive_native.dart' as rive;
 import 'package:rive_native/rive_native.dart';
 
-abstract base class ProceduralPainter extends rive.RivePainter {
+abstract base class ProceduralPainter extends RivePainter {
   /// Called each frame to advance the animation.
   bool advance(double elapsedSeconds);
 
   /// Called each frame to paint the artboard.
-  void paint(rive.Renderer renderer, Size size, double paintPixelRatio);
+  void paint(Renderer renderer, Size size, double paintPixelRatio);
 
   /// Request a repaint of the artboard.
   void scheduleRepaint() => notifyListeners();
@@ -20,61 +19,28 @@ abstract base class ProceduralPainter extends rive.RivePainter {
 
 abstract base class ArtboardPainter extends ProceduralPainter {
   /// Called when the underlying artboard changes.
-  void artboardChanged(rive.Artboard artboard);
+  void artboardChanged(Artboard artboard);
 }
 
-base class BasicArtboardPainter extends ArtboardPainter {
+base class BasicArtboardPainter extends ArtboardPainter
+    with RiveTickerAwarePainterMixin, RiveArtboardLayoutMixin {
   BasicArtboardPainter({
-    rive.Fit fit = rive.RiveDefaults.fit,
-    Alignment alignment = rive.RiveDefaults.alignment,
-  })  : _fit = fit,
-        _alignment = alignment;
-
-  rive.Fit get fit => _fit;
-  rive.Fit _fit;
-  set fit(rive.Fit value) {
-    if (_fit == value) return;
-
-    if (value == rive.Fit.layout) {
-      _requireResize = true;
-    } else if (_fit == rive.Fit.layout) {
-      // Previous fit was Layout, we need to reset the artboard size to default
-      artboard?.resetArtboardSize();
-    }
-
-    _fit = value;
-    notifyListeners();
+    Fit fit = RiveDefaults.fit,
+    Alignment alignment = RiveDefaults.alignment,
+    double layoutScaleFactor = RiveDefaults.layoutScaleFactor,
+  }) {
+    this.fit = fit;
+    this.alignment = alignment;
+    this.layoutScaleFactor = layoutScaleFactor;
   }
 
-  Alignment get alignment => _alignment;
-  Alignment _alignment;
-  set alignment(Alignment value) {
-    if (_alignment == value) return;
-
-    _alignment = value;
-    notifyListeners();
-  }
-
-  /// The scale factor to use for a fit of type `Fit.layout`.
-  double get layoutScaleFactor => _layoutScaleFactor;
-  double _layoutScaleFactor = rive.RiveDefaults.layoutScaleFactor;
-  set layoutScaleFactor(double value) {
-    if (_layoutScaleFactor == value) return;
-    _layoutScaleFactor = value;
-
-    if (fit == rive.Fit.layout) {
-      _requireResize = true;
-    }
-
-    notifyListeners();
-  }
-
-  rive.Artboard? _artboard;
-  rive.Artboard? get artboard => _artboard;
+  Artboard? _artboard;
+  @override
+  Artboard? get artboard => _artboard;
 
   @mustCallSuper
   @override
-  void artboardChanged(rive.Artboard artboard) {
+  void artboardChanged(Artboard artboard) {
     _artboard = artboard;
   }
 
@@ -84,29 +50,9 @@ base class BasicArtboardPainter extends ArtboardPainter {
     return advanced || (_artboard?.updatePass() ?? false);
   }
 
-  /// The last size of the paint area.
-  Size get lastSize => _lastSize;
-  Size _lastSize = Size.zero;
-
-  double get lastPaintPixelRatio => _lastPaintPixelRatio;
-  double _lastPaintPixelRatio = 1.0;
-
-  bool _requireResize = false;
-
   @mustCallSuper
   @override
-  void paint(rive.Renderer renderer, Size size, double paintPixelRatio) {
-    _requireResize = _requireResize ||
-        (fit == rive.Fit.layout &&
-            (_lastSize != size || _lastPaintPixelRatio != paintPixelRatio));
-
-    _lastSize = size;
-    _lastPaintPixelRatio = paintPixelRatio;
-
-    if (_requireResize) {
-      _resizeArtboard();
-    }
-
+  void paint(Renderer renderer, Size size, double paintPixelRatio) {
     final artboard = _artboard;
     if (artboard == null) {
       return;
@@ -114,31 +60,21 @@ base class BasicArtboardPainter extends ArtboardPainter {
     renderer.align(
       fit,
       alignment,
-      rive.AABB.fromValues(0, 0, size.width, size.height),
+      AABB.fromValues(0, 0, size.width, size.height),
       artboard.bounds,
-      _layoutScaleFactor,
+      layoutScaleFactor,
     );
     artboard.draw(renderer);
-  }
-
-  void _resizeArtboard() {
-    final artboard = _artboard;
-    if (artboard == null) return;
-
-    artboard.width = lastSize.width / _layoutScaleFactor;
-    artboard.height = lastSize.height / _layoutScaleFactor;
-
-    _requireResize = false;
   }
 }
 
 base class SingleAnimationPainter extends BasicArtboardPainter {
   final String animationName;
-  rive.Animation? _animation;
+  Animation? _animation;
   SingleAnimationPainter(this.animationName, {super.fit, super.alignment});
 
   @override
-  void artboardChanged(rive.Artboard artboard) {
+  void artboardChanged(Artboard artboard) {
     super.artboardChanged(artboard);
     _animation = artboard.animationNamed(animationName);
     notifyListeners();
@@ -151,29 +87,28 @@ base class SingleAnimationPainter extends BasicArtboardPainter {
 }
 
 base class StateMachinePainter extends BasicArtboardPainter
-    with rive.RivePointerEventMixin {
+    with RivePointerEventMixin {
   final String? stateMachineName;
-  rive.StateMachine? _stateMachine;
-  rive.StateMachine? get stateMachine => _stateMachine;
-  rive.CallbackHandler? _inputCallbackHandler;
+  StateMachine? _stateMachine;
+  StateMachine? get stateMachine => _stateMachine;
+  CallbackHandler? _inputCallbackHandler;
 
   StateMachinePainter({
     this.stateMachineName,
     this.withStateMachine,
     super.fit,
     super.alignment,
-    rive.RiveHitTestBehavior hitTestBehavior =
-        rive.RiveDefaults.hitTestBehaviour,
-    MouseCursor cursor = rive.RiveDefaults.mouseCursor,
+    RiveHitTestBehavior hitTestBehavior = RiveDefaults.hitTestBehaviour,
+    MouseCursor cursor = RiveDefaults.mouseCursor,
   }) {
     this.cursor = cursor;
     this.hitTestBehavior = hitTestBehavior;
   }
 
-  final void Function(rive.StateMachine)? withStateMachine;
+  final void Function(StateMachine)? withStateMachine;
 
   @override
-  void artboardChanged(rive.Artboard artboard) {
+  void artboardChanged(Artboard artboard) {
     super.artboardChanged(artboard);
     _stateMachine?.dispose();
     final machine = _stateMachine = stateMachineName != null
@@ -200,7 +135,7 @@ base class StateMachinePainter extends BasicArtboardPainter
             artboardBounds: artboard.bounds,
             fit: fit,
             alignment: alignment,
-            size: _lastSize,
+            size: size,
             scaleFactor: layoutScaleFactor,
           ),
         ) ??
@@ -219,7 +154,7 @@ base class StateMachinePainter extends BasicArtboardPainter
       artboardBounds: artboard.bounds,
       fit: fit,
       alignment: alignment,
-      size: _lastSize,
+      size: size,
       scaleFactor: layoutScaleFactor,
     );
 
@@ -252,7 +187,7 @@ base class StateMachinePainter extends BasicArtboardPainter
 }
 
 class RiveFileWidget extends StatefulWidget {
-  final rive.File file;
+  final File file;
   final ArtboardPainter painter;
   final String? artboardName;
 
@@ -268,7 +203,7 @@ class RiveFileWidget extends StatefulWidget {
 }
 
 class _RiveFileWidgetState extends State<RiveFileWidget> {
-  rive.Artboard? _artboard;
+  Artboard? _artboard;
   @override
   void initState() {
     _initArtboard();
@@ -318,7 +253,7 @@ class _RiveFileWidgetState extends State<RiveFileWidget> {
 }
 
 class RiveArtboardWidget extends StatefulWidget {
-  final rive.Artboard artboard;
+  final Artboard artboard;
   final ArtboardPainter painter;
 
   const RiveArtboardWidget({
@@ -348,7 +283,7 @@ class _RiveArtboardWidgetState extends State<RiveArtboardWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.artboard.riveFactory == rive.Factory.flutter) {
+    if (widget.artboard.riveFactory == Factory.flutter) {
       // Render the artboard with the Flutter renderer.
       return FlutterRiveRendererWidget(
         painter: widget.painter,
@@ -361,7 +296,7 @@ class _RiveArtboardWidgetState extends State<RiveArtboardWidget> {
 }
 
 class RiveProceduralRenderingWidget extends StatefulWidget {
-  final rive.Factory riveFactory;
+  final Factory riveFactory;
   final ProceduralPainter painter;
 
   const RiveProceduralRenderingWidget({
@@ -379,7 +314,7 @@ class _RiveRiveProceduralRenderingWidgetState
     extends State<RiveProceduralRenderingWidget> {
   @override
   Widget build(BuildContext context) {
-    if (widget.riveFactory == rive.Factory.flutter) {
+    if (widget.riveFactory == Factory.flutter) {
       // Render the artboard with the Flutter renderer.
       return FlutterRiveRendererWidget(painter: widget.painter);
     } else {
@@ -400,29 +335,43 @@ class ArtboardWidgetRiveRenderer extends StatefulWidget {
 }
 
 base class ArtboardWidgetPainter<T extends ProceduralPainter>
-    extends rive.RenderTexturePainter with rive.RivePointerEventMixin {
+    extends RenderTexturePainter
+    with
+        RivePointerEventMixin,
+        RiveTickerAwarePainterMixin,
+        RiveArtboardLayoutMixin {
   final T? _painter;
   T? get painter => _painter;
-  final rive.RivePointerEventMixin? _pointerEvent;
+  final RivePointerEventMixin? _pointerEvent;
+  final RiveTickerAwarePainterMixin? _tickerAwarePainter;
+  final RiveArtboardLayoutMixin? _riveArtboardLayoutMixin;
   ArtboardWidgetPainter(this._painter)
-      : _pointerEvent = _painter is rive.RivePointerEventMixin
-            ? _painter as rive.RivePointerEventMixin
+      : _pointerEvent = _painter is RivePointerEventMixin
+            ? _painter as RivePointerEventMixin
+            : null,
+        _tickerAwarePainter = _painter is RiveTickerAwarePainterMixin
+            ? _painter as RiveTickerAwarePainterMixin
+            : null,
+        _riveArtboardLayoutMixin = _painter is RiveArtboardLayoutMixin
+            ? _painter as RiveArtboardLayoutMixin
             : null {
     _painter?.addListener(notifyListeners);
+    _tickerAwarePainter?.setTickerStateProvider(() => isTickerActive);
   }
 
   @override
   void dispose() {
     super.dispose();
     _painter?.removeListener(notifyListeners);
+    _tickerAwarePainter?.setTickerStateProvider(null);
   }
 
   @override
   Color get background => const Color(
-      0x00000000); // TODO (GORDON): make this an override and add to canvas imppl
+      0x00000000); // TODO (GORDON): make this an override and add to canvas implementation
 
   @override
-  bool paint(rive.RenderTexture texture, double devicePixelRatio, Size size,
+  bool paint(RenderTexture texture, double devicePixelRatio, Size size,
       double elapsedSeconds) {
     final painter = _painter;
     if (painter == null) {
@@ -435,8 +384,7 @@ base class ArtboardWidgetPainter<T extends ProceduralPainter>
   }
 
   @override
-  MouseCursor get cursor =>
-      _pointerEvent?.cursor ?? rive.RiveDefaults.mouseCursor;
+  MouseCursor get cursor => _pointerEvent?.cursor ?? RiveDefaults.mouseCursor;
 
   @override
   bool hitTest(Offset position) => _pointerEvent?.hitTest(position) ?? false;
@@ -446,14 +394,19 @@ base class ArtboardWidgetPainter<T extends ProceduralPainter>
       _pointerEvent?.pointerEvent(event, entry);
 
   @override
-  rive.RiveHitTestBehavior get hitTestBehavior =>
-      _pointerEvent?.hitTestBehavior ?? rive.RiveDefaults.hitTestBehaviour;
+  RiveHitTestBehavior get hitTestBehavior =>
+      _pointerEvent?.hitTestBehavior ?? RiveDefaults.hitTestBehaviour;
+
+  @override
+  void updateSize(Size size) => _riveArtboardLayoutMixin?.updateSize(size);
+
+  @override
+  Artboard? get artboard => _riveArtboardLayoutMixin?.artboard;
 }
 
 class _ArtboardWidgetRiveRendererState
     extends State<ArtboardWidgetRiveRenderer> {
-  final rive.RenderTexture renderTexture =
-      rive.RiveNative.instance.makeRenderTexture();
+  final RenderTexture renderTexture = RiveNative.instance.makeRenderTexture();
 
   ArtboardWidgetPainter? _painter;
   @override
@@ -511,11 +464,12 @@ class FlutterRiveRendererWidget extends LeafRenderObjectWidget {
   }
 }
 
-abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
+abstract class RiveRenderBox<T extends RivePainter> extends RenderBox
     implements MouseTrackerAnnotation {
   Ticker? _ticker;
 
-  rive.RivePointerEventMixin? _rivePointerEvent;
+  RivePointerEventMixin? _rivePointerEvent;
+  RiveArtboardLayoutMixin? _riveArtboardResizeMixin;
 
   // TODO expose option through widget
   // @override
@@ -533,8 +487,12 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     _rivePainter?.removeListener(restartTickerIfStopped);
     _rivePainter = value;
     _rivePainter?.addListener(restartTickerIfStopped);
-    _rivePointerEvent = _rivePainter is rive.RivePointerEventMixin
-        ? _rivePainter as rive.RivePointerEventMixin
+    _rivePointerEvent = _rivePainter is RivePointerEventMixin
+        ? _rivePainter as RivePointerEventMixin
+        : null;
+    _setupTickerStateCallback();
+    _riveArtboardResizeMixin = _rivePainter is RiveArtboardLayoutMixin
+        ? _rivePainter as RiveArtboardLayoutMixin
         : null;
     restartTickerIfStopped();
   }
@@ -582,8 +540,8 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     }
   }
 
-  rive.RiveHitTestBehavior get hitTestBehavior =>
-      _rivePointerEvent?.hitTestBehavior ?? rive.RiveDefaults.hitTestBehaviour;
+  RiveHitTestBehavior get hitTestBehavior =>
+      _rivePointerEvent?.hitTestBehavior ?? RiveDefaults.hitTestBehaviour;
 
   void rivePointerEvent(
           PointerEvent event, HitTestEntry<HitTestTarget> entry) =>
@@ -592,7 +550,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
     // If hit testing is disabled, we don't need to perform any hit testing.
-    if (hitTestBehavior == rive.RiveHitTestBehavior.none) {
+    if (hitTestBehavior == RiveHitTestBehavior.none) {
       return false;
     }
 
@@ -606,7 +564,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     }
 
     // Let the hit continue to targets behind the animation.
-    if (hitTestBehavior == rive.RiveHitTestBehavior.transparent) {
+    if (hitTestBehavior == RiveHitTestBehavior.transparent) {
       return false;
     }
 
@@ -618,12 +576,12 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
   @override
   bool hitTestSelf(Offset position) {
     switch (hitTestBehavior) {
-      case rive.RiveHitTestBehavior.none:
+      case RiveHitTestBehavior.none:
         return false;
-      case rive.RiveHitTestBehavior.opaque:
+      case RiveHitTestBehavior.opaque:
         return true; // Always hit
-      case rive.RiveHitTestBehavior.translucent:
-      case rive.RiveHitTestBehavior.transparent:
+      case RiveHitTestBehavior.translucent:
+      case RiveHitTestBehavior.transparent:
         {
           final value = _rivePointerEvent?.hitTest(position) ?? false;
           return value;
@@ -641,7 +599,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 
   @override
   MouseCursor get cursor =>
-      _rivePointerEvent?.cursor ?? rive.RiveDefaults.mouseCursor;
+      _rivePointerEvent?.cursor ?? RiveDefaults.mouseCursor;
 
   @override
   PointerEnterEventListener? get onEnter => (event) {
@@ -678,6 +636,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 
   @override
   void dispose() {
+    _cleanUpTickerStateCallback();
     _rivePainter?.removeListener(restartTickerIfStopped);
     _ticker?.dispose();
     _ticker = null;
@@ -690,6 +649,26 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
     _prevTickerElapsedInSeconds = 0;
 
     _ticker?.stop();
+  }
+
+  /// Whether the ticker is currently active.
+  bool get isTickerActive => _ticker?.isActive ?? false;
+
+  /// Sets up the ticker state callback for the current painter.
+  void _setupTickerStateCallback() {
+    // Provide ticker state to painters that support it
+    final painter = rivePainter;
+    if (painter is RiveTickerAwarePainterMixin) {
+      (painter as RiveTickerAwarePainterMixin)
+          .setTickerStateProvider(() => isTickerActive);
+    }
+  }
+
+  void _cleanUpTickerStateCallback() {
+    final painter = rivePainter;
+    if (painter is RiveTickerAwarePainterMixin) {
+      (painter as RiveTickerAwarePainterMixin).setTickerStateProvider(null);
+    }
   }
 
   void startTicker() {
@@ -831,6 +810,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 
   @override
   void performLayout() {
+    _riveArtboardResizeMixin?.updateSize(size);
     restartTickerIfStopped();
     if (!sizedByParent) {
       // We can use the intrinsic size here because the intrinsic size matches
@@ -841,6 +821,7 @@ abstract class RiveRenderBox<T extends rive.RivePainter> extends RenderBox
 }
 
 class FlutterRiveRenderBox extends RiveRenderBox<ProceduralPainter> {
+
   bool _shouldAdvance = false;
 
   @override
@@ -864,10 +845,9 @@ class FlutterRiveRenderBox extends RiveRenderBox<ProceduralPainter> {
   @override
   void paint(PaintingContext context, Offset offset) {
     final Canvas canvas = context.canvas;
-
     canvas.save();
     canvas.translate(offset.dx, offset.dy);
-    var renderer = rive.Renderer.make(canvas);
+    final renderer = Renderer.make(canvas);
     rivePainter?.paint(renderer, size, 1.0);
     renderer.dispose();
     canvas.restore();
@@ -881,7 +861,14 @@ abstract class RiveNativeRenderBox extends RiveRenderBox<RenderTexturePainter> {
   bool get shouldAdvance => _shouldAdvance;
   bool _shouldAdvance = true;
 
-  RiveNativeRenderBox(this._renderTexture);
+  RiveNativeRenderBox(this._renderTexture) {
+    _renderTexture.onTextureChanged = () {
+      // Paint immediately after creating the texture ensures
+      // that the texture is visually updated.
+      paintTexture(0, forceShouldAdvance: true);
+    };
+  }
+
   double _devicePixelRatio = 1.0;
 
   /// The device pixel ratio used to determine the size of the paint area.
@@ -948,7 +935,6 @@ abstract class RiveNativeRenderBox extends RiveRenderBox<RenderTexturePainter> {
     }
   }
 
-  Matrix4 _lastTransformTo = Matrix4.identity();
   double desiredTransformWidthScale = 1;
   double desiredTransformHeightScale = 1;
   double get scaleWidth => devicePixelRatio * desiredTransformWidthScale;
@@ -966,13 +952,15 @@ abstract class RiveNativeRenderBox extends RiveRenderBox<RenderTexturePainter> {
   void paint(PaintingContext context, Offset offset) {
     if (_markNeedsLayoutCalled) {
       final currentTransformTo = getTransformTo(null);
-      if (currentTransformTo != _lastTransformTo) {
+      final newWidthScale = currentTransformTo.entry(0, 0).abs();
+      final newHeightScale = currentTransformTo.entry(1, 1).abs();
+      if (newWidthScale != desiredTransformWidthScale ||
+          newHeightScale != desiredTransformHeightScale) {
         SchedulerBinding.instance.addPostFrameCallback((_) {
           markNeedsLayout();
         });
-        _lastTransformTo = Matrix4.copy(currentTransformTo);
-        desiredTransformWidthScale = _lastTransformTo.entry(0, 0).abs();
-        desiredTransformHeightScale = _lastTransformTo.entry(1, 1).abs();
+        desiredTransformWidthScale = newWidthScale;
+        desiredTransformHeightScale = newHeightScale;
       }
       _markNeedsLayoutCalled = false;
     }

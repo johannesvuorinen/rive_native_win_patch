@@ -15,6 +15,7 @@ late js.JSFunction _requestImplementedType;
 late js.JSFunction _scriptingWorkspaceCompleteInsertion;
 // ignore: unused_element
 late js.JSFunction _scriptingWorkspaceRequestAutocomplete;
+late js.JSFunction _scriptingWorkspaceRequestGetDefinition;
 late js.JSFunction _scriptingWorkspaceHighlightRow;
 late js.JSFunction _scriptingWorkspaceResponse;
 late js.JSFunction _setScriptSource;
@@ -23,6 +24,7 @@ late js.JSFunction _checkScriptsWithRequires;
 late js.JSFunction _setSystemGeneratedSource;
 late js.JSFunction _scriptingWorkspaceFormat;
 late js.JSFunction _scriptingWorkspaceCompile;
+late js.JSFunction _scriptingWorkspaceFindInFiles;
 late js.JSFunction _nativeFontBytes;
 late js.JSFunction _freeNativeFont;
 late js.JSFunction _scriptingWorkspaceBuiltinDefinitions;
@@ -66,6 +68,8 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         module['scriptingWorkspaceCompleteInsertion'] as js.JSFunction;
     _scriptingWorkspaceRequestAutocomplete =
         module['scriptingWorkspaceRequestAutocomplete'] as js.JSFunction;
+    _scriptingWorkspaceRequestGetDefinition =
+        module['scriptingWorkspaceRequestGetDefinition'] as js.JSFunction;
     _scriptingWorkspaceBuiltinDefinitions =
         module['_scriptingWorkspaceBuiltinDefinitions'] as js.JSFunction;
     _scriptingWorkspaceHighlightRow =
@@ -84,6 +88,8 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         module['scriptingWorkspaceFormat'] as js.JSFunction;
     _scriptingWorkspaceCompile =
         module['scriptingWorkspaceCompile'] as js.JSFunction;
+    _scriptingWorkspaceFindInFiles =
+        module['_scriptingWorkspaceFindInFiles'] as js.JSFunction;
     _nativeFontBytes = module['nativeFontBytes'] as js.JSFunction;
     _freeNativeFont = module['_freeNativeFont'] as js.JSFunction;
   }
@@ -117,6 +123,20 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
   Future<AutocompleteResult> autocomplete(
       String scriptName, ScriptPosition position) {
     final workId = (_scriptingWorkspaceRequestAutocomplete.callAsFunction(
+            null,
+            _nativePtr.toJS,
+            scriptName.toJS,
+            position.line.toJS,
+            position.column.toJS) as js.JSNumber)
+        .toDartInt;
+
+    return registerCompleter(workId);
+  }
+
+  @override
+  Future<DefinitionResult> getDefinition(
+      String scriptName, ScriptPosition position) {
+    final workId = (_scriptingWorkspaceRequestGetDefinition.callAsFunction(
             null,
             _nativePtr.toJS,
             scriptName.toJS,
@@ -219,14 +239,22 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
       .callAsFunctionEx(null, _nativePtr.toJS, scriptId.toJS);
 
   @override
-  Future<CompileResult?> compile(String scriptName,
-      {bool failOnErrors = false, bool compileDependencies = false}) {
-    final workId = (_scriptingWorkspaceCompile.callAsFunction(
-            null,
-            _nativePtr.toJS,
-            scriptName.toJS,
-            _boolWasm(failOnErrors),
-            _boolWasm(compileDependencies)) as js.JSNumber)
+  Future<CompileResult?> compile(
+    String scriptName, {
+    bool failOnErrors = false,
+    bool compileDependencies = false,
+    OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+    DebugLevel debugLevel = DebugLevel.medium,
+  }) {
+    final workId = (_scriptingWorkspaceCompile.callAsFunctionEx(
+      null,
+      _nativePtr.toJS,
+      scriptName.toJS,
+      _boolWasm(failOnErrors),
+      _boolWasm(compileDependencies),
+      optimizationLevel.index.toJS,
+      debugLevel.index.toJS,
+    ) as js.JSNumber)
         .toDartInt;
     return registerCompleter(workId);
   }
@@ -252,6 +280,49 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
       RiveWasm.toDartString((_scriptingWorkspaceBuiltinDefinitions
               .callAsFunction(null, _nativePtr.toJS) as js.JSNumber)
           .toDartInt);
+
+  @override
+  Future<CompileAndSignResult?> compileAndSign(
+      Iterable<String> scriptNames, Uint8List privateKey,
+      {bool failOnErrors = false,
+      OptimizationLevel optimizationLevel = OptimizationLevel.medium,
+      DebugLevel debugLevel = DebugLevel.medium}) {
+    throw UnimplementedError("Not supported on web.");
+  }
+
+  @override
+  Future<FindInFilesResult> findInFiles(
+    Iterable<String>? inclusionSet,
+    String query, {
+    bool caseSensitive = false,
+    bool matchWholeWord = false,
+    bool regularExpression = false,
+    bool trim = false,
+  }) {
+    final writer = BinaryWriter();
+    final inclusionList = inclusionSet?.toList() ?? [];
+    writer.writeVarUint(inclusionList.length);
+    for (final name in inclusionList) {
+      writer.writeString(name);
+    }
+    writer.writeString(query);
+    final buffer = writer.uint8Buffer;
+    final wasmBuffer = WasmBuffer.fromBytes(buffer);
+
+    final workId = (_scriptingWorkspaceFindInFiles.callAsFunctionEx(
+      null,
+      _nativePtr.toJS,
+      wasmBuffer.pointer,
+      buffer.length.toJS,
+      _boolWasm(caseSensitive),
+      _boolWasm(matchWholeWord),
+      _boolWasm(regularExpression),
+      _boolWasm(trim),
+    ) as js.JSNumber)
+        .toDartInt;
+    wasmBuffer.dispose();
+    return registerCompleter(workId);
+  }
 }
 
 ScriptingWorkspace makeScriptingWorkspace() => ScriptingWorkspaceWasm();

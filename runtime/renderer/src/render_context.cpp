@@ -224,10 +224,13 @@ void RenderContext::LogicalFlush::rewind()
     m_outerCubicTessEndLocation = 0;
     m_outerCubicTessVertexIdx = 0;
     m_midpointFanTessVertexIdx = 0;
+    m_baselineShaderMiscFlags = gpu::ShaderMiscFlags::none;
 
     m_flushDesc = FlushDescriptor();
 
     m_drawList.reset();
+    m_firstDstBlendBarrier = nullptr;
+    m_dstBlendBarrierListTail = &m_firstDstBlendBarrier;
     m_combinedShaderFeatures = gpu::ShaderFeatures::NONE;
 
     m_currentPathID = 0;
@@ -706,14 +709,15 @@ void RenderContext::flush(const FlushResources& flushResources)
         .atlasTextureWidth = layoutCounts.maxAtlasWidth,
         .atlasTextureHeight = layoutCounts.maxAtlasHeight,
         .plsTransientBackingWidth =
-            (layoutCounts.maxPLSTransientBackingDepth > 0)
+            (layoutCounts.maxPLSTransientBackingPlaneCount > 0)
                 ? static_cast<size_t>(m_frameDescriptor.renderTargetWidth)
                 : 0,
         .plsTransientBackingHeight =
-            (layoutCounts.maxPLSTransientBackingDepth > 0)
+            (layoutCounts.maxPLSTransientBackingPlaneCount > 0)
                 ? static_cast<size_t>(m_frameDescriptor.renderTargetHeight)
                 : 0,
-        .plsTransientBackingDepth = layoutCounts.maxPLSTransientBackingDepth,
+        .plsTransientBackingPlaneCount =
+            layoutCounts.maxPLSTransientBackingPlaneCount,
         .plsAtomicCoverageBackingWidth =
             (frameInterlockMode() == gpu::InterlockMode::atomics)
                 ? static_cast<size_t>(m_frameDescriptor.renderTargetWidth)
@@ -770,7 +774,7 @@ void RenderContext::flush(const FlushResources& flushResources)
         .atlasTextureHeight = 5,             // 125%
         .plsTransientBackingWidth = 4,       // 100% (i.e., don't overallocate)
         .plsTransientBackingHeight = 4,      // 100% (i.e., don't overallocate)
-        .plsTransientBackingDepth = 4,       // 100% (i.e., don't overallocate)
+        .plsTransientBackingPlaneCount = 4,  // 100% (i.e., don't overallocate)
         .plsAtomicCoverageBackingWidth = 4,  // 100% (i.e., don't overallocate)
         .plsAtomicCoverageBackingHeight = 4, // 100% (i.e., don't overallocate)
         .coverageBufferLength = 5,           // 125%
@@ -822,7 +826,7 @@ void RenderContext::flush(const FlushResources& flushResources)
             .atlasTextureHeight = 2,             // 66.7%
             .plsTransientBackingWidth = 3,       // 100% (i.e., always shrink)
             .plsTransientBackingHeight = 3,      // 100% (i.e., always shrink)
-            .plsTransientBackingDepth = 3,       // 100% (i.e., always shrink)
+            .plsTransientBackingPlaneCount = 3,  // 100% (i.e., always shrink)
             .plsAtomicCoverageBackingWidth = 3,  // 100% (i.e., always shrink)
             .plsAtomicCoverageBackingHeight = 3, // 100% (i.e., always shrink)
             .coverageBufferLength = 2,           // 66.7%
@@ -923,7 +927,7 @@ void RenderContext::flush(const FlushResources& flushResources)
     }
 }
 
-static uint32_t pls_transient_backing_depth(
+static uint32_t pls_transient_backing_plane_count(
     gpu::InterlockMode interlockMode,
     gpu::DrawContents combinedDrawContents)
 {
@@ -954,9 +958,34 @@ static uint32_t pls_transient_backing_depth(
     RIVE_UNREACHABLE();
 }
 
-static bool wants_fixed_function_color_output(
-    gpu::InterlockMode interlockMode,
+static bool wants_msaa_manual_resolve(
+    const gpu::PlatformFeatures& platformFeatures,
+    const RenderTarget* renderTarget,
+    const IAABB& renderTargetUpdateBounds,
     gpu::DrawContents combinedDrawContents)
+{
+    if (platformFeatures.msaaResolveNeedsDraw)
+    {
+        return true;
+    }
+    if (platformFeatures.msaaResolveWithPartialBoundsNeedsDraw &&
+        !renderTargetUpdateBounds.contains(renderTarget->bounds()))
+    {
+        return true;
+    }
+    if (platformFeatures.msaaResolveAfterDstReadNeedsDraw &&
+        (combinedDrawContents & gpu::DrawContents::advancedBlend))
+    {
+        return true;
+    }
+    return false;
+}
+
+static bool wants_fixed_function_color_output(
+    const gpu::PlatformFeatures& platformFeatures,
+    gpu::InterlockMode interlockMode,
+    gpu::DrawContents combinedDrawContents,
+    bool msaaManualResolve)
 {
     switch (interlockMode)
     {
@@ -966,17 +995,23 @@ static bool wants_fixed_function_color_output(
             return false;
 
         case gpu::InterlockMode::atomics:
-        case gpu::InterlockMode::msaa:
             return !(combinedDrawContents & gpu::DrawContents::advancedBlend);
 
         case gpu::InterlockMode::clockwise:
             assert(!(combinedDrawContents & (gpu::DrawContents::nonZeroFill |
                                              gpu::DrawContents::evenOddFill)));
-            return !(combinedDrawContents & gpu::DrawContents::advancedBlend);
+            return platformFeatures.supportsClockwiseFixedFunctionMode &&
+                   !(combinedDrawContents & gpu::DrawContents::advancedBlend);
 
         case gpu::InterlockMode::clockwiseAtomic:
-            // clockwiseAtomic currently ignores fixedFunctionColorOutput.
-            return false;
+            // clockwiseAtomic currently always sets fixedFunctionColorOutput.
+            return true;
+
+        case gpu::InterlockMode::msaa:
+            // Manual MSAA resolves read the framebuffer, so they can't use
+            // fixedFunctionColorOutput.
+            return !msaaManualResolve &&
+                   !(combinedDrawContents & gpu::DrawContents::advancedBlend);
     }
 
     RIVE_UNREACHABLE();
@@ -1079,9 +1114,6 @@ void RenderContext::LogicalFlush::layoutResources(
     m_flushDesc.renderTarget = flushResources.renderTarget;
     m_flushDesc.interlockMode = m_ctx->frameInterlockMode();
     m_flushDesc.msaaSampleCount = frameDescriptor.msaaSampleCount;
-    m_flushDesc.fixedFunctionColorOutput =
-        wants_fixed_function_color_output(m_ctx->frameInterlockMode(),
-                                          m_combinedDrawContents);
 
     // In atomic mode, we may be able to skip the explicit clear of the color
     // buffer and fold it into the atomic "resolve" operation instead.
@@ -1158,6 +1190,23 @@ void RenderContext::LogicalFlush::layoutResources(
         m_flushDesc.renderTargetUpdateBounds = {0, 0, 0, 0};
     }
 
+    m_flushDesc.msaaManualResolve =
+        m_flushDesc.interlockMode == gpu::InterlockMode::msaa &&
+        wants_msaa_manual_resolve(m_ctx->platformFeatures(),
+                                  m_flushDesc.renderTarget,
+                                  m_flushDesc.renderTargetUpdateBounds,
+                                  m_combinedDrawContents);
+
+    m_flushDesc.fixedFunctionColorOutput =
+        wants_fixed_function_color_output(m_ctx->platformFeatures(),
+                                          m_ctx->frameInterlockMode(),
+                                          m_combinedDrawContents,
+                                          m_flushDesc.msaaManualResolve);
+    if (m_flushDesc.fixedFunctionColorOutput)
+    {
+        m_baselineShaderMiscFlags |=
+            gpu::ShaderMiscFlags::fixedFunctionColorOutput;
+    }
     m_flushDesc.atlasContentWidth = m_atlasMaxX;
     m_flushDesc.atlasContentHeight = m_atlasMaxY;
 
@@ -1211,10 +1260,10 @@ void RenderContext::LogicalFlush::layoutResources(
         std::max(m_atlasMaxX, runningFrameLayoutCounts->maxAtlasWidth);
     runningFrameLayoutCounts->maxAtlasHeight =
         std::max(m_atlasMaxY, runningFrameLayoutCounts->maxAtlasHeight);
-    runningFrameLayoutCounts->maxPLSTransientBackingDepth =
-        std::max(pls_transient_backing_depth(m_flushDesc.interlockMode,
-                                             m_combinedDrawContents),
-                 runningFrameLayoutCounts->maxPLSTransientBackingDepth);
+    runningFrameLayoutCounts->maxPLSTransientBackingPlaneCount =
+        std::max(pls_transient_backing_plane_count(m_flushDesc.interlockMode,
+                                                   m_combinedDrawContents),
+                 runningFrameLayoutCounts->maxPLSTransientBackingPlaneCount);
     runningFrameLayoutCounts->maxCoverageBufferLength =
         std::max<size_t>(m_coverageBufferLength,
                          runningFrameLayoutCounts->maxCoverageBufferLength);
@@ -1549,7 +1598,7 @@ void RenderContext::LogicalFlush::writeResources()
             // require a barrier before or after.
             m_drawList.emplace_back(m_ctx->perFrameAllocator(),
                                     gpu::DrawType::renderPassInitialize,
-                                    gpu::ShaderMiscFlags::none,
+                                    m_baselineShaderMiscFlags,
                                     gpu::DrawContents::none,
                                     1,
                                     0,
@@ -1566,22 +1615,30 @@ void RenderContext::LogicalFlush::writeResources()
             // draw the old renderTarget contents into the framebuffer at the
             // beginning of the render pass when
             // LoadAction::preserveRenderTarget is specified.
-            m_drawList.emplace_back(m_ctx->perFrameAllocator(),
-                                    gpu::DrawType::renderPassInitialize,
-                                    gpu::ShaderMiscFlags::none,
-                                    gpu::DrawContents::opaquePaint,
-                                    1,
-                                    0,
-                                    BlendMode::srcOver,
-                                    ImageSampler::LinearClamp(),
-                                    // The MSAA init reads the framebuffer, so
-                                    // it needs the equivalent of a "dstBlend"
-                                    // barrier.
-                                    BarrierFlags::dstBlend);
-            m_combinedDrawContents |= m_drawList.tail().drawContents;
+            m_drawList.emplace_back(
+                m_ctx->perFrameAllocator(),
+                gpu::DrawType::renderPassInitialize,
+                m_baselineShaderMiscFlags,
+                gpu::DrawContents::opaquePaint,
+                1,
+                0,
+                // A more realistic value here would be "BlendMode::none" (which
+                // is what actually happens), but since that isn't a Rive blend
+                // mode, we just need any value here. It will get ignored by the
+                // draw.
+                BlendMode::srcOver,
+                ImageSampler{.filter = ImageFilter::bilinear},
+                // The MSAA init reads the framebuffer, so it needs the
+                // equivalent of a "dstBlend" barrier.
+                BarrierFlags::dstBlend);
+            m_combinedDrawContents |= m_drawList.tail()->drawContents;
             // The draw that follows the this init will need a special
             // "msaaPostInit" barrier.
             m_pendingBarriers |= BarrierFlags::msaaPostInit;
+            assert(m_dstBlendBarrierListTail == &m_firstDstBlendBarrier);
+            assert(m_firstDstBlendBarrier == nullptr);
+            m_firstDstBlendBarrier = m_drawList.tail();
+            m_dstBlendBarrierListTail = &m_drawList.tail()->nextDstBlendBarrier;
         }
 
         // Find a mask that tells us when to insert barriers, and which barriers
@@ -1665,22 +1722,27 @@ void RenderContext::LogicalFlush::writeResources()
             m_draws[drawIndex]->pushToRenderContext(this, subpassIndex);
             priorSignedKey = signedKey;
         }
+    }
 
-        // Atomic mode needs one more draw to resolve all the pixels.
-        if (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics)
-        {
-            m_drawList
-                .emplace_back(m_ctx->perFrameAllocator(),
-                              gpu::DrawType::renderPassResolve,
-                              gpu::ShaderMiscFlags::none,
-                              gpu::DrawContents::none,
-                              1,
-                              0,
-                              BlendMode::srcOver,
-                              ImageSampler::LinearClamp(),
-                              BarrierFlags::plsAtomicPreResolve)
-                .shaderFeatures = m_combinedShaderFeatures;
-        }
+    // Some modes need one more draw to resolve all the pixels.
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics ||
+        m_flushDesc.msaaManualResolve)
+    {
+        m_drawList.emplace_back(
+            m_ctx->perFrameAllocator(),
+            gpu::DrawType::renderPassResolve,
+            m_baselineShaderMiscFlags,
+            (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics)
+                ? gpu::DrawContents::none
+                : gpu::DrawContents::opaquePaint,
+            1,
+            0,
+            BlendMode::srcOver,
+            ImageSampler::LinearClamp(),
+            (m_ctx->frameInterlockMode() == gpu::InterlockMode::atomics)
+                ? BarrierFlags::plsAtomicPreResolve
+                : BarrierFlags::msaaPreResolve);
+        m_combinedDrawContents |= m_drawList.tail()->drawContents;
     }
 
     // Write out the draws to the feather atlas. Do this after the main draws
@@ -1820,6 +1882,7 @@ void RenderContext::LogicalFlush::writeResources()
         initialTriangleVertexDataSize;
 
     m_flushDesc.drawList = &m_drawList;
+    m_flushDesc.firstDstBlendBarrier = m_firstDstBlendBarrier;
 
     // Write out the uniforms for this flush now that the flushDescriptor is
     // complete.
@@ -2117,27 +2180,28 @@ void RenderContext::setResourceSizes(ResourceAllocationCounts allocs,
             math::lossless_numeric_cast<uint32_t>(allocs.atlasTextureHeight));
     }
 
-    assert(allocs.plsTransientBackingDepth <=
-           RenderContextImpl::PLS_TRANSIENT_BACKING_MAX_DEPTH);
+    assert(allocs.plsTransientBackingPlaneCount <=
+           RenderContextImpl::PLS_TRANSIENT_BACKING_MAX_PLANE_COUNT);
     LOG_TEXTURE_3D_SIZE("plsTransientBacking",
                         plsTransientBackingWidth,
                         plsTransientBackingHeight,
-                        plsTransientBackingDepth,
+                        plsTransientBackingPlaneCount,
                         sizeof(uint32_t));
     if (allocs.plsTransientBackingWidth !=
             m_currentResourceAllocations.plsTransientBackingWidth ||
         allocs.plsTransientBackingHeight !=
             m_currentResourceAllocations.plsTransientBackingHeight ||
-        allocs.plsTransientBackingDepth !=
-            m_currentResourceAllocations.plsTransientBackingDepth ||
+        allocs.plsTransientBackingPlaneCount !=
+            m_currentResourceAllocations.plsTransientBackingPlaneCount ||
         forceRealloc)
     {
-        m_impl->resizeTransientPLSBacking(math::lossless_numeric_cast<uint32_t>(
-                                              allocs.plsTransientBackingWidth),
-                                          math::lossless_numeric_cast<uint32_t>(
-                                              allocs.plsTransientBackingHeight),
-                                          math::lossless_numeric_cast<uint32_t>(
-                                              allocs.plsTransientBackingDepth));
+        m_impl->resizeTransientPLSBacking(
+            math::lossless_numeric_cast<uint32_t>(
+                allocs.plsTransientBackingWidth),
+            math::lossless_numeric_cast<uint32_t>(
+                allocs.plsTransientBackingHeight),
+            math::lossless_numeric_cast<uint32_t>(
+                allocs.plsTransientBackingPlaneCount));
     }
 
     assert(allocs.plsAtomicCoverageBackingWidth <=
@@ -2810,7 +2874,7 @@ void RenderContext::LogicalFlush::pushAtlasBlit(PathDraw* draw, uint32_t pathID)
     m_ctx->m_triangleVertexData.emplace_back(Vec2D{r, t}, 1, pathID);
     pushPathDraw(draw,
                  DrawType::atlasBlit,
-                 gpu::ShaderMiscFlags::none,
+                 m_baselineShaderMiscFlags,
                  6,
                  baseVertex);
 }
@@ -2834,7 +2898,7 @@ void RenderContext::LogicalFlush::pushImageRectDraw(ImageRectDraw* draw)
 
     DrawBatch& batch = pushDraw(draw,
                                 DrawType::imageRect,
-                                gpu::ShaderMiscFlags::none,
+                                m_baselineShaderMiscFlags,
                                 PaintType::image,
                                 1,
                                 0);
@@ -2857,7 +2921,7 @@ void RenderContext::LogicalFlush::pushImageMeshDraw(ImageMeshDraw* draw)
 
     DrawBatch& batch = pushDraw(draw,
                                 DrawType::imageMesh,
-                                gpu::ShaderMiscFlags::none,
+                                m_baselineShaderMiscFlags,
                                 PaintType::image,
                                 draw->indexCount(),
                                 0);
@@ -2889,7 +2953,7 @@ void RenderContext::LogicalFlush::pushStencilClipResetDraw(
     m_ctx->m_triangleVertexData.emplace_back(Vec2D{r, t}, 0, z);
     pushDraw(draw,
              DrawType::msaaStencilClipReset,
-             gpu::ShaderMiscFlags::none,
+             m_baselineShaderMiscFlags,
              PaintType::clipUpdate,
              6,
              baseVertex);
@@ -2904,6 +2968,16 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushPathDraw(
 {
     RIVE_PROF_SCOPE()
     assert(m_hasDoneLayout);
+
+    // Clockwise fills get their own shaders in rasterOrdering mode.
+    // TODO: eventually we will use draw_clockwise_path.frag for these
+    // draws in rasterOrdering mode, instead of just making a variant of
+    // draw_raster_order_path.frag.
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::rasterOrdering &&
+        (draw->drawContents() & gpu::DrawContents::clockwiseFill))
+    {
+        shaderMiscFlags |= gpu::ShaderMiscFlags::clockwiseFill;
+    }
 
     // Clockwise mode gives clip updates a dedicated draw by setting
     // gpu::ShaderMiscFlags::clipUpdateOnly.
@@ -2948,31 +3022,28 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushPathDraw(
     return batch;
 }
 
-RIVE_ALWAYS_INLINE static bool can_combine_draw_contents(
-    gpu::InterlockMode interlockMode,
-    gpu::DrawContents batchContents,
-    const Draw* draw)
+RIVE_ALWAYS_INLINE static bool can_combine_shader_misc_flags(
+    const gpu::DrawBatch* batch,
+    const Draw* draw,
+    gpu::ShaderMiscFlags shaderMiscFlags)
 {
-    // Feathered fills should never attempt to combine with fills, strokes, or
-    // feathered strokes because they use a different DrawType.
-    assert((batchContents & gpu::DrawContents::featheredFill).bits() ==
-           (draw->drawContents() & gpu::DrawContents::featheredFill).bits());
+    // If a path doesn't have ANY_PATH_FILL bits, it means it's a stroke.
+    constexpr static auto ANY_PATH_FILL = gpu::DrawContents::clockwiseFill |
+                                          gpu::DrawContents::evenOddFill |
+                                          gpu::DrawContents::nonZeroFill;
 
-    constexpr static auto ANY_FILL = gpu::DrawContents::clockwiseFill |
-                                     gpu::DrawContents::evenOddFill |
-                                     gpu::DrawContents::nonZeroFill;
-    // Raster ordering uses a different shader for clockwise fills, so we
-    // can't combine both legacy and clockwise fills into the same draw.
-    if (interlockMode == gpu::InterlockMode::rasterOrdering &&
-        // Anything can be combined if either the existing batch or the new draw
-        // don't have fills yet.
-        (batchContents & ANY_FILL) && (draw->drawContents() & ANY_FILL))
+    gpu::ShaderMiscFlags compareMask = ~gpu::ShaderMiscFlags::none;
+
+    // Strokes draw identically in the clockwise and legacy shaders, so strokes
+    // can be combined with paths of any fill type.
+    if ((!(batch->drawContents & ANY_PATH_FILL) ||
+         !(draw->drawContents() & ANY_PATH_FILL)))
     {
-        assert(!(draw->drawContents() & gpu::DrawContents::stroke));
-        return (batchContents & gpu::DrawContents::clockwiseFill).bits() ==
-               (draw->drawContents() & gpu::DrawContents::clockwiseFill).bits();
+        compareMask &= ~gpu::ShaderMiscFlags::clockwiseFill;
     }
-    return true;
+
+    return (batch->shaderMiscFlags & compareMask).bits() ==
+           (shaderMiscFlags & compareMask).bits();
 }
 
 RIVE_ALWAYS_INLINE static bool can_combine_draw_images(
@@ -3005,6 +3076,8 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
     assert(m_hasDoneLayout);
     assert(elementCount > 0);
 
+    shaderMiscFlags |= m_baselineShaderMiscFlags;
+
     bool canMergeWithPreviousBatch;
     switch (drawType)
     {
@@ -3023,19 +3096,18 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         case DrawType::msaaStencilClipReset:
             if (!m_drawList.empty() && m_pendingBarriers == BarrierFlags::none)
             {
-                const DrawBatch& currentBatch = m_drawList.tail();
+                const DrawBatch* currentBatch = m_drawList.tail();
                 canMergeWithPreviousBatch =
-                    currentBatch.drawType == drawType &&
-                    currentBatch.shaderMiscFlags == shaderMiscFlags &&
-                    can_combine_draw_contents(m_ctx->frameInterlockMode(),
-                                              currentBatch.drawContents,
-                                              draw) &&
-                    can_combine_draw_images(currentBatch.imageTexture,
+                    currentBatch->drawType == drawType &&
+                    can_combine_shader_misc_flags(currentBatch,
+                                                  draw,
+                                                  shaderMiscFlags) &&
+                    can_combine_draw_images(currentBatch->imageTexture,
                                             draw->imageTexture(),
-                                            currentBatch.imageSampler,
+                                            currentBatch->imageSampler,
                                             draw->imageSampler());
                 if (canMergeWithPreviousBatch &&
-                    currentBatch.baseElement + currentBatch.elementCount !=
+                    currentBatch->baseElement + currentBatch->elementCount !=
                         baseElement)
                 {
                     // In MSAA mode, multiple subpasses reference the same
@@ -3063,7 +3135,7 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
     DrawBatch* batch;
     if (!canMergeWithPreviousBatch)
     {
-        batch = &m_drawList.emplace_back(
+        batch = m_drawList.emplace_back(
             m_ctx->perFrameAllocator(),
             drawType,
             shaderMiscFlags,
@@ -3076,10 +3148,9 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
     }
     else
     {
-        batch = &m_drawList.tail();
+        batch = m_drawList.tail();
         assert(m_pendingBarriers == BarrierFlags::none);
         assert(batch->drawType == drawType);
-        assert(batch->shaderMiscFlags == shaderMiscFlags);
         assert(batch->baseElement + batch->elementCount == baseElement);
 
         batch->elementCount += elementCount;
@@ -3089,9 +3160,18 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
             m_ctx->frameInterlockMode() != gpu::InterlockMode::clockwise ||
             (batch->drawContents & gpu::DrawContents::clipUpdate).bits() ==
                 (draw->drawContents() & gpu::DrawContents::clipUpdate).bits());
+
+        // Feathered fills should never combine with fills, strokes, or
+        // feathered strokes because they use a different DrawType.
+        assert(
+            (batch->drawContents & gpu::DrawContents::featheredFill).bits() ==
+            (draw->drawContents() & gpu::DrawContents::featheredFill).bits());
+
         // msaa can't mix drawContents in a batch.
         assert(m_ctx->frameInterlockMode() != gpu::InterlockMode::msaa ||
                batch->drawContents == draw->drawContents());
+
+        batch->shaderMiscFlags |= shaderMiscFlags;
         batch->drawContents |= draw->drawContents();
     }
 
@@ -3168,6 +3248,7 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         // batch.
         assert(!m_ctx->platformFeatures().supportsBlendAdvancedKHR ||
                batch->firstBlendMode == draw->blendMode());
+
         if (draw->blendMode() != BlendMode::srcOver &&
             !m_ctx->platformFeatures().supportsBlendAdvancedCoherentKHR)
         {
@@ -3184,8 +3265,21 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
             // that barrier for the first subpass is all we need.)
             if (draw->nextDstRead() == nullptr)
             {
-                batch->barriers |= BarrierFlags::dstBlend;
                 batch->dstReadList = draw->addToDstReadList(batch->dstReadList);
+                assert(m_dstBlendBarrierListTail != nullptr);
+                if (!(batch->barriers & BarrierFlags::dstBlend))
+                {
+                    batch->barriers |= BarrierFlags::dstBlend;
+                    // Add ourselves to the "dstBlendBarrier" list.
+                    assert(*m_dstBlendBarrierListTail == nullptr);
+                    *m_dstBlendBarrierListTail = batch;
+                    assert(batch->nextDstBlendBarrier == nullptr);
+                    m_dstBlendBarrierListTail = &batch->nextDstBlendBarrier;
+                }
+                // We either added ourselves to the dstBlendBarrier list or
+                // merged into a batch that was already part of it.
+                assert(m_dstBlendBarrierListTail ==
+                       &batch->nextDstBlendBarrier);
             }
         }
     }

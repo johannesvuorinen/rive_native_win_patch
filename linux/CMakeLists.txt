@@ -46,7 +46,20 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
 )
 target_link_directories(${PLUGIN_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/bin/lib/release/")
 
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter
+# Set the library directory variable for easier reference
+set(LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin/lib/release")
+
+target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
+
+target_link_options(${PLUGIN_NAME} PRIVATE
+  -Wl,--start-group
+)
+
+# NOTE: ORDER OF THE LIBRARIES IS IMPORTANT!!!
+# Libraries that depend on other libraries must be listed ABOVE the libraries
+# they depend on.
+# E.g rive_native depends on everything else, so it must be listed at the top.
+target_link_libraries(${PLUGIN_NAME} PRIVATE
   rive_native
   rive
   rive_harfbuzz
@@ -59,6 +72,30 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter
   rive_pls_renderer
   rive_yoga
   miniaudio
+)
+
+# Conditionally link scripting libraries if real scripting support is available.
+# When building with flutter-runtime, dummy libraries are created that we don't need to link.
+# When building for editor, real scripting libraries are built and a marker file is created.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rive_marker_linux_scripting")
+  # Define RIVE_WITH_SCRIPTING so the plugin knows to call riveLuaDummyLinker
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE RIVE_WITH_SCRIPTING)
+  # Luau libraries that rive_native depends on - must come after rive_native
+  # to resolve undefined symbols from rive_native.
+  # Dependency order: luau_vm (base) -> luau_compiler -> luau_analyzer -> rive_scripting_workspace
+  # Link in reverse order so dependencies come after dependents
+  target_link_libraries(${PLUGIN_NAME} PRIVATE
+    rive_scripting_workspace
+    luau_analyzer
+    luau_compiler
+    luau_vm
+    stylua_ffi
+    brotli
+  )
+endif()
+
+target_link_options(${PLUGIN_NAME} PRIVATE
+  -Wl,--end-group
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)

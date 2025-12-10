@@ -31,9 +31,12 @@ class _ExampleTextRunsState extends State<ExampleTextRuns> {
       stateMachineName: 'button',
       withArtboard: (artboard) {
         // https://rive.app/docs/runtimes/text#read%2Fupdate-text-runs-at-runtime
+        // ignore: deprecated_member_use
         final initialText = artboard.getText('button_text');
         debugPrint('Initial text: $initialText');
+        // ignore: deprecated_member_use
         artboard.setText('button_text', 'Hello, world!');
+        // ignore: deprecated_member_use
         final updatedText = artboard.getText('button_text');
         debugPrint('Updated text: $updatedText');
       },
